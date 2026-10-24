@@ -86,6 +86,9 @@ done
 
 **Проверка:** ни одного `000`. Иначе — сервер не подходит, сообщи владельцу.
 
+Если порты 80/443 уже заняты другим веб-сервером (`sudo ss -ltnp '( sport = :80 or sport = :443 )'`),
+не останавливай его: Mini App встанет за него — см. U5 в разделе про обновление (вариант B).
+
 Порты 80 и 443 в локальном файрволе (если он включён):
 
 ```bash
@@ -292,15 +295,235 @@ systemctl is-enabled docker   # должно быть enabled
 
 ---
 
-## Обновление
+## Обновление существующего бота до Mini App на своём домене
+
+Для случая, когда бот уже работает (развёрнут по этой инструкции до появления Mini App), а у владельца
+есть свой домен. Шаги U1–U9 идут по порядку, у каждого есть проверка.
+
+Что написать агенту:
+> Обнови бота в `/opt/english-buddy` до свежего `main` по разделу «Обновление существующего бота до
+> Mini App на своём домене» в DEPLOY.md. Домен для Mini App: `<домен или поддомен>`. Сайт, который уже
+> работает на сервере, не трогай. В конце попроси меня проверить бота и пришли отчёт по шагу U9.
+
+### U1. Переменные и резервная копия
+
+```bash
+export APP_DIR=/opt/english-buddy
+export WEBAPP_DOMAIN='english.example.com'   # домен от владельца — без https:// и без слеша
+cd "$APP_DIR"
+git log --oneline -1                                                                       # запомни коммит
+docker compose exec -T db psql -U bot -d bot -tAc "select version_num from alembic_version"  # запомни ревизию
+mkdir -p backups
+docker compose exec -T db pg_dump -U bot bot | gzip > "backups/before-mini-app-$(date +%Y%m%d-%H%M).sql.gz"
+ls -lh backups | tail -3
+```
+
+**Проверка:** свежий файл `before-mini-app-*.sql.gz` больше нуля байт. Ревизия сейчас — `0001`.
+
+### U2. Домен
+
+```bash
+export PUBLIC_IP=$(curl -s https://api.ipify.org)
+echo "IP сервера: $PUBLIC_IP"
+getent hosts "$WEBAPP_DOMAIN"
+```
+
+**Проверка:** `getent hosts` возвращает IP сервера.
+
+- Домен смотрит на другой IP или не резолвится — попроси владельца завести A-запись
+  `WEBAPP_DOMAIN → $PUBLIC_IP` и дождись, пока `getent hosts` покажет нужный IP.
+- Если на основном домене уже открыт сайт, а владелец дал именно его — предложи поддомен
+  (например, `english.<домен>`): Mini App занимает корень сайта `/`, делить его с сайтом нельзя.
+
+### U3. Кто занимает порты 80 и 443
+
+```bash
+sudo ss -ltnp '( sport = :80 or sport = :443 )'
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E ':(80|443)->' || true
+```
+
+- **Никто** → **вариант A**: HTTPS сделает Caddy из нашего `docker-compose.yml`.
+- **nginx, Caddy, Apache или контейнер другого проекта** → **вариант B**: Mini App встаёт за уже
+  работающий веб-сервер. Его не останавливай и не заменяй — на нём может быть сайт владельца.
+
+Запиши, какой вариант выбран, — он нужен в U5–U9.
+
+### U4. Код и `.env`
+
+```bash
+cd "$APP_DIR"
+git pull --ff-only
+git log --oneline -1
+# переменные, которых нет в старом .env (значения по умолчанию из кода подходят):
+comm -13 <(grep -oE '^[A-Z0-9_]+=' .env | sort) <(grep -oE '^[A-Z0-9_]+=' .env.example | sort)
+grep -q '^WEBAPP_DOMAIN=' .env || echo 'WEBAPP_DOMAIN=' >> .env
+sed -i "s|^WEBAPP_DOMAIN=.*|WEBAPP_DOMAIN=${WEBAPP_DOMAIN}|" .env
+grep -E '^(WEBAPP_DOMAIN|ADMIN_IDS)=' .env
+```
+
+**Проверка:** в `docker-compose.yml` появились сервисы `migrate`, `web` и `caddy`; в `.env`
+`WEBAPP_DOMAIN` равен домену, `ADMIN_IDS` не пустой (если пустой — заполнишь в U8).
+
+### U5. Только для варианта B: Mini App за существующим веб-сервером
+
+Отключи наш Caddy и открой Mini App только на локальном порту — файл не в git, `git pull` его не тронет:
+
+```bash
+cat > docker-compose.override.yml <<'YAML'
+services:
+  web:
+    ports:
+      - "127.0.0.1:8000:8000"
+  caddy:
+    profiles: ["disabled"]   # HTTPS делает веб-сервер владельца
+YAML
+docker compose config --services   # caddy в списке быть не должно
+```
+
+Дальше — по тому, какой веб-сервер нашёлся в U3.
+
+**nginx на хосте:**
+
+```bash
+sudo tee /etc/nginx/conf.d/english-buddy.conf >/dev/null <<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${WEBAPP_DOMAIN};
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 120s;   # генерация урока идёт до минуты
+    }
+}
+NGINX
+sudo nginx -t && sudo systemctl reload nginx
+command -v certbot >/dev/null || sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d "$WEBAPP_DOMAIN" --non-interactive --agree-tos --redirect \
+  --register-unsafely-without-email
+```
+
+Если `nginx -t` ругается на `[::]:80` (`Address family not supported`) — на сервере выключен IPv6:
+убери строку `listen [::]:80;` и повтори. Если в `nginx.conf` нет `include /etc/nginx/conf.d/*.conf;`
+(бывает в ручных сборках), положи файл туда, откуда nginx берёт сайты (`/etc/nginx/sites-enabled/`).
+
+**Caddy на хосте** (не наш контейнер):
+
+```bash
+sudo tee -a /etc/caddy/Caddyfile >/dev/null <<CADDY
+
+${WEBAPP_DOMAIN} {
+	reverse_proxy 127.0.0.1:8000
+}
+CADDY
+sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+**Прокси в Docker** (Traefik, nginx-proxy и т.п.): из их контейнера `127.0.0.1:8000` хоста недоступен.
+Подключи сервис `web` к сети прокси и опиши маршрут на `web:8000` по правилам этого прокси (для
+Traefik — метки в `docker-compose.override.yml`). Если устройство прокси неочевидно — опиши
+владельцу, что нашёл, и спроси, как он хочет подключить новый сайт.
+
+**Проверка варианта B:** `sudo nginx -t` / `caddy validate` без ошибок, сайт владельца на основном
+домене открывается как раньше (`curl -sI https://<основной домен>`).
+
+### U6. Сборка, проверка ключей, запуск
+
+```bash
+cd "$APP_DIR"
+docker compose build
+docker compose run --rm bot python -m app.preflight
+docker compose up -d
+sleep 30
+docker compose ps -a
+docker compose logs migrate
+docker compose logs --tail=40 bot web
+```
+
+**Проверка:**
+- preflight заканчивается `Готово к запуску.`; строка `Mini App` показывает `https://$WEBAPP_DOMAIN`;
+- `migrate` — `Exited (0)`, в логе `Running upgrade 0001 -> 0002` и `0002 -> 0003`;
+- `bot`, `web`, `db`, `backup` — `Up …`; в варианте A ещё `caddy` — `Up …`;
+- в логе бота `Run polling for bot @<имя>`; ни в боте, ни в `web` нет `Traceback`.
+
+Если preflight ругается — таблица в шаге 6; бот при этом продолжает работать на старой версии,
+пока ты не выполнил `docker compose up -d`.
+
+### U7. HTTPS и Mini App снаружи
+
+```bash
+curl -sS -m 20 "https://$WEBAPP_DOMAIN/healthz"; echo
+curl -sS -m 20 -o /dev/null -w '%{http_code}\n' "https://$WEBAPP_DOMAIN/"
+echo | openssl s_client -connect "$WEBAPP_DOMAIN:443" -servername "$WEBAPP_DOMAIN" 2>/dev/null \
+  | openssl x509 -noout -issuer -enddate
+```
+
+**Проверка:** `{"status":"ok"}`, код `200`, сертификат от Let's Encrypt/ZeroSSL и не просрочен.
+
+Не отвечает:
+- вариант A — `docker compose logs caddy | tail -30`: `timeout`/`connection refused` при ACME — порты
+  80/443 закрыты в панели хостинга (попроси владельца открыть TCP 80, 443 и UDP 443);
+- вариант B — `curl -sS http://127.0.0.1:8000/healthz` с сервера: если отвечает, проблема в
+  настройке веб-сервера (U5), если нет — `docker compose logs web`.
+
+### U8. Проверка владельцем
+
+Если `ADMIN_IDS` в `.env` пустой — заполни его, как в шаге 8, и выполни
+`docker compose up -d --force-recreate bot web`.
+
+Попроси владельца:
+1. записать голосовое — ответ приходит **одним** голосовым, в подписи цитата сказанного и текст ответа;
+2. открыть `/settings` — озвучка, собеседник, уровень и исправления на одном экране;
+3. нажать «Уроки» слева от поля ввода (если кнопки нет — закрыть и заново открыть чат) →
+   «Собрать урок» → пройти до конца; после урока бот сам пишет в чат на тему урока;
+4. отправить `/admin` — открывается админка с графиками и списком пользователей.
+
+Пока владелец проверяет, смотри `docker compose logs --since 10m bot web` (там не должно быть
+`Traceback`), потом проверь базу:
+
+```bash
+q() { docker compose exec -T db psql -U bot -d bot -c "$1"; }
+q "select version_num from alembic_version;"
+q "select voice_mode, count(*) from users group by voice_mode;"
+q "select id, status, score, total, payload->>'title' as title from lessons order by id desc limit 3;"
+q "select kind, count(*), round(sum(cost_usd), 4) from usage where created_at > now() - interval '1 hour' group by kind;"
+```
+
+**Проверка:** ревизия `0003`; у владельца урок со статусом `done`; в `usage` за последний час есть
+`llm_lesson`, а если в уроке было аудирование — `tts_lesson`.
+
+### U9. Отчёт владельцу
+
+- коммит до и после обновления, ревизия БД до и после;
+- вариант A или B; для B — какой веб-сервер и какой файл конфигурации добавлен;
+- адрес Mini App, кто выпустил сертификат и до какой даты;
+- результат preflight и проверок U7–U8;
+- где лежит резервная копия `before-mini-app-*.sql.gz`.
+
+### Откат этого обновления
+
+Сохрани данные о премиуме и уроках, если они нужны: откат схемы до `0001` удаляет таблицы `lessons`
+и `audio_cache` и поля `premium_until`, `blocked`, `voice_mode`.
+
+```bash
+cd "$APP_DIR"
+docker compose run --rm bot alembic downgrade 0001
+git checkout <коммит из U1>
+rm -f docker-compose.override.yml          # вариант B; конфиг веб-сервера из U5 тоже убери
+docker compose up -d --build --remove-orphans
+```
+
+## Обновление (обычное)
 
 ```bash
 cd "$APP_DIR"
 docker compose exec -T db psql -U bot -d bot -tAc "select version_num from alembic_version"  # запомни ревизию
 git log --oneline -1                                                                       # запомни коммит
 git pull --ff-only
-# новые переменные из .env.example, которых нет в .env (их значения по умолчанию подходят;
-# WEBAPP_DOMAIN заполни, как в шаге 4, — без него Mini App выключен):
+# новые переменные из .env.example, которых нет в .env:
 comm -13 <(grep -oE '^[A-Z0-9_]+=' .env | sort) <(grep -oE '^[A-Z0-9_]+=' .env.example | sort)
 docker compose build
 docker compose run --rm bot python -m app.preflight
