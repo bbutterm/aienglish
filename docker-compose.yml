@@ -36,7 +36,9 @@ services:
 
   caddy:
     image: caddy:2.11-alpine
-    env_file: .env
+    environment:
+      # Пока домен не задан, Caddy просто слушает :80 и не падает (Mini App при этом выключен).
+      WEBAPP_DOMAIN: ${WEBAPP_DOMAIN:-:80}
     ports:
       - "80:80"
       - "443:443"
