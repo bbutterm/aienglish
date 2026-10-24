@@ -301,7 +301,7 @@ git log --oneline -1                                                            
 git pull --ff-only
 # новые переменные из .env.example, которых нет в .env (их значения по умолчанию подходят;
 # WEBAPP_DOMAIN заполни, как в шаге 4, — без него Mini App выключен):
-comm -13 <(grep -oE '^[A-Z_]+' .env | sort) <(grep -oE '^[A-Z_]+' .env.example | sort)
+comm -13 <(grep -oE '^[A-Z0-9_]+=' .env | sort) <(grep -oE '^[A-Z0-9_]+=' .env.example | sort)
 docker compose build
 docker compose run --rm bot python -m app.preflight
 docker compose up -d
