@@ -238,7 +238,12 @@ def create_app(state: WebState) -> FastAPI:
             "lessons": [public_view(lesson) for lesson in lessons],
             "remaining": await state.lessons.remaining_today(session, user),
             "limit": limits_for(user, state.settings).lessons,
-            "material": {"mistakes": len(material.mistakes), "words": len(material.vocab)},
+            "material": {
+                "mistakes": len(material.mistakes),
+                "words": len(material.vocab),
+                "messages": material.user_messages,
+                "topics": material.topics,
+            },
         }
 
     @app.post("/api/lessons")

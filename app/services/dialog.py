@@ -202,6 +202,10 @@ class DialogService:
         async with self.session_factory() as session:
             await repo.save_mistakes(session, user_id, message_id, analysis.mistakes)
             await repo.save_vocab(session, user_id, vocab)
+            if analysis.topic:
+                await session.execute(
+                    update(Message).where(Message.id == message_id).values(topic=analysis.topic)
+                )
             if analysis.estimated_level:
                 await session.execute(
                     update(User)

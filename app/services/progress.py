@@ -1,4 +1,4 @@
-"""Прогресс ученика для Mini App: активность, ошибки по типам, слова, сильные и слабые стороны."""
+"""Прогресс ученика для Mini App: активность, темы, ошибки, слова, сильные и слабые стороны."""
 
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -11,6 +11,7 @@ from app.db.models import Lesson, Message, Mistake, Usage, User, Vocab
 from app.services.review import TYPE_LABELS_RU
 
 ACTIVITY_DAYS = 60
+TOPICS_LIMIT = 6
 
 
 def _zone(name: str | None) -> str:
@@ -103,6 +104,18 @@ async def build_progress(
         .order_by(Mistake.times_seen.desc(), Mistake.id.desc())
         .limit(5)
     )
+    topic_rows = await session.execute(
+        select(Message.topic, func.count(Message.id.distinct()), func.count(Mistake.id))
+        .outerjoin(Mistake, Mistake.message_id == Message.id)
+        .where(*is_user_msg, Message.topic.is_not(None), Message.created_at >= month_ago)
+        .group_by(Message.topic)
+        .order_by(func.count(Message.id.distinct()).desc(), Message.topic)
+        .limit(TOPICS_LIMIT)
+    )
+    topics = [
+        {"topic": topic, "messages": messages, "mistakes": mistakes}
+        for topic, messages, mistakes in topic_rows
+    ]
     vocab_rows = await session.execute(
         select(Vocab.status, func.count(Vocab.id))
         .where(Vocab.user_id == user.id)
@@ -158,6 +171,7 @@ async def build_progress(
             "prev_week": per_ten(mistakes_prev, messages_prev),
             "messages_week": messages_week,
         },
+        "topics": topics,
         "mistakes_by_type": sorted(by_type, key=lambda e: (-e["count"], -e["prev"])),
         "recurring": [
             {"original": m.original, "corrected": m.corrected, "times_seen": m.times_seen}

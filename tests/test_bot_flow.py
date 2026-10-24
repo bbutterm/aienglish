@@ -172,6 +172,10 @@ async def test_text_dialog_with_analyst_and_mistakes(harness: Harness, fake_apis
     assert await h.count(Mistake) == 1
     assert await h.count(Vocab) == 1
     assert (await h.user()).estimated_level == "A2"
+    # тема реплики (для урока и прогресса) нормализована: «Кино.» → «кино»
+    async with h.session_factory() as session:
+        topics = list(await session.scalars(select(Message.topic).order_by(Message.id)))
+    assert topics == [None, "кино", None]  # приветствие, реплика, ответ собеседника
     assert await h.count(Usage, Usage.kind == "llm_analyst") == 1
     assert await h.count(Usage, Usage.kind == "llm_companion") == 2
 

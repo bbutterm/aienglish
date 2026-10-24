@@ -97,6 +97,7 @@ class FakeAPIs:
         self.companion_reply = "That sounds fun! What did you watch?"
         self.stt_text = "I go to cinema yesterday"
         self.lesson_mode = "ok"  # ok | garbage | error
+        self.topic: str | None = "Кино."  # тема реплики от аналитика (сырая, как от модели)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "openrouter.ai":
@@ -145,6 +146,7 @@ class FakeAPIs:
                         {"term": "Blockbuster", "translation_ru": "блокбастер", "source": "bot"}
                     ],
                     "estimated_level": "A2",
+                    "topic_ru": self.topic,
                 },
                 ensure_ascii=False,
             )
@@ -168,13 +170,14 @@ class FakeAPIs:
 
 
 def is_lesson_request(body: dict[str, Any]) -> bool:
-    return body["messages"][0]["content"].startswith("You create a short daily English lesson")
+    return body["messages"][0]["content"].startswith("You create a short English lesson")
 
 
 def fake_lesson(material: dict[str, Any]) -> dict[str, Any]:
     exercises: list[dict[str, Any]] = [
         {
             "type": "fix",
+            "section": "grammar",
             "mistake_id": m["id"],
             "options": [m["corrected"], m["original"], "I goes to cinema"],
             "answer": 0,
@@ -185,6 +188,7 @@ def fake_lesson(material: dict[str, Any]) -> dict[str, Any]:
     exercises += [
         {
             "type": "gap",
+            "section": "grammar",
             "sentence": "Yesterday I ___ a film.",
             "options": ["watch", "watched", "watching"],
             "answer": 1,
@@ -192,6 +196,7 @@ def fake_lesson(material: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "type": "translate",
+            "section": "topic",
             "ru": "Я смотрел фильм",
             "options": ["I watched a film", "I watch a film", "I am watch film"],
             "answer": 0,
@@ -199,15 +204,43 @@ def fake_lesson(material: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "type": "listen",
+            "section": "topic",
             "text": "We went to the cinema last night",
             "options": ["We went to the cinema last night", "We want to the cinema", "We wend"],
             "answer": 0,
         },
     ]
+    topics = material.get("conversation_topics") or []
     return {
-        "title": "Что было вчера",
+        "title": "Кино и прошедшее время",
         "topic": "Favourite films",
-        "intro_ru": "Повторим прошедшее время.",
+        "topic_ru": topics[0] if topics else "кино",
+        "intro_ru": "Вы говорили про кино. Повторим прошедшее время.",
+        "topic_block": {
+            "summary_ru": "Ты рассказывал, как сходил в кино.",
+            "phrases": [
+                {
+                    "en": "to go to the cinema",
+                    "ru": "сходить в кино",
+                    "example": "We went to the cinema.",
+                },
+                {
+                    "en": "a blockbuster",
+                    "ru": "блокбастер",
+                    "example": "It was a huge blockbuster.",
+                },
+                {"en": "", "ru": "пустая фраза отбрасывается"},
+            ],
+        },
+        "grammar": [
+            {
+                "title_ru": "Past Simple",
+                "rule_ru": "О законченном действии в прошлом говорим в Past Simple: go → went.",
+                "examples": [{"en": "I went home.", "ru": "Я пошёл домой."}],
+                "mistake_ids": [m["id"] for m in material["mistakes"]] + [99999],
+            },
+            {"title_ru": "Без правила", "rule_ru": ""},
+        ],
         "exercises": exercises,
         "cards": [
             {"vocab_id": w["id"], "example": f"A {w['term']} example."} for w in material["words"]

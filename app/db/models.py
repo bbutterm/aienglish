@@ -76,6 +76,7 @@ class Message(Base):
     kind: Mapped[str]  # text|voice|photo
     text: Mapped[str | None]  # для voice — транскрипт
     photo_caption: Mapped[str | None]  # описание фото
+    topic: Mapped[str | None]  # тема разговора на этой реплике (рус., 1–3 слова) — от аналитика
     tg_message_id: Mapped[int | None] = mapped_column(BigInteger)
     tts_file_id: Mapped[str | None]  # кэш озвучки
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

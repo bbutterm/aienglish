@@ -1,4 +1,7 @@
-"""Урок дня в Mini App: собирается LLM из ошибок и слов пользователя, проверяется на сервере."""
+"""Урок в Mini App по последним разговорам: тема разговора + разбор ошибок и грамматика.
+
+Собирается LLM из реплик, ошибок и слов пользователя; ответы проверяются на сервере.
+"""
 
 import asyncio
 import hashlib
@@ -6,8 +9,8 @@ import json
 import logging
 import random
 import re
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,12 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db import repo
-from app.db.models import AudioCache, Lesson, Mistake, User, Vocab
+from app.db.models import AudioCache, Lesson, Message, Mistake, User, Vocab
 from app.llm.jsonutil import extract_json_object
 from app.llm.openrouter import LLMError, OpenRouterClient
 from app.personas import get_persona
 from app.prompts import render
 from app.services.plans import limits_for
+from app.services.review import TYPE_LABELS_RU
 from app.services.tts import TextToSpeech, TTSError
 from app.services.usage import record_llm, record_usage, tts_cost
 
@@ -40,6 +44,15 @@ MAX_EXERCISES = 10
 MAX_CARDS = 6
 MISTAKES_FOR_LESSON = 8
 WORDS_FOR_LESSON = 6
+SECTIONS = ("topic", "grammar")
+MAX_PHRASES = 6
+MAX_GRAMMAR_POINTS = 2
+MISTAKES_IN_REVIEW = 5
+# Разговор для урока: реплики с прошлого урока; если их почти нет — за последнюю неделю.
+CONVERSATION_MESSAGES = 40
+CONVERSATION_FALLBACK = timedelta(days=7)
+MIN_FRESH_USER_MESSAGES = 4
+TRANSCRIPT_CHARS = 6000
 # Ошибку, исправленную в уроке, повторим через неделю; неисправленную — завтра.
 FIX_RESOLVED_REVIEW = timedelta(days=7)
 FIX_RETRY = timedelta(days=1)
@@ -59,6 +72,12 @@ class LessonError(Exception):
 class Material:
     mistakes: list[Mistake]
     vocab: list[Vocab]
+    messages: list[Message] = field(default_factory=list)  # недавний разговор, по порядку
+    topics: list[str] = field(default_factory=list)  # темы разговора, самые частые первыми
+
+    @property
+    def user_messages(self) -> int:
+        return sum(1 for m in self.messages if m.role == "user")
 
 
 def _text(value: object, limit: int) -> str | None:
@@ -160,6 +179,62 @@ def _cards(material: Material, examples: dict[int, str]) -> list[dict[str, Any]]
     ]
 
 
+def clean_topic_block(raw: object) -> dict[str, Any] | None:
+    """Блок «Тема»: о чём говорили и полезные фразы по теме."""
+    if not isinstance(raw, dict):
+        return None
+    phrases = []
+    for item in raw.get("phrases") or []:
+        if not isinstance(item, dict) or not (en := _text(item.get("en"), 80)):
+            continue
+        phrases.append(
+            {"en": en, "ru": _text(item.get("ru"), 80), "example": _text(item.get("example"), 160)}
+        )
+        if len(phrases) >= MAX_PHRASES:
+            break
+    summary = _text(raw.get("summary_ru"), 400)
+    if not phrases and not summary:
+        return None
+    return {"summary_ru": summary, "phrases": phrases}
+
+
+def clean_grammar(raw: object, mistake_ids: set[int]) -> list[dict[str, Any]]:
+    """Короткие правила, которые объясняют ошибки пользователя."""
+    points = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        title, rule = _text(item.get("title_ru"), 60), _text(item.get("rule_ru"), 600)
+        if not title or not rule:
+            continue
+        examples = [
+            {"en": en, "ru": _text(example.get("ru"), 160)}
+            for example in (item.get("examples") or [])[:3]
+            if isinstance(example, dict) and (en := _text(example.get("en"), 160))
+        ]
+        ids = [i for i in item.get("mistake_ids") or [] if i in mistake_ids]
+        points.append(
+            {"title_ru": title, "rule_ru": rule, "examples": examples, "mistake_ids": ids}
+        )
+        if len(points) >= MAX_GRAMMAR_POINTS:
+            break
+    return points
+
+
+def mistakes_review(material: Material) -> list[dict[str, Any]]:
+    """Разбор ошибок из разговоров: было → правильно, почему."""
+    return [
+        {
+            "id": m.id,
+            "original": m.original,
+            "corrected": m.corrected,
+            "explanation_ru": m.explanation_ru,
+            "type_ru": TYPE_LABELS_RU.get(m.type, m.type),
+        }
+        for m in material.mistakes[:MISTAKES_IN_REVIEW]
+    ]
+
+
 def build_payload(raw: dict[str, Any], material: Material, rng: random.Random) -> dict[str, Any]:
     """Ответ модели → урок. ValueError, если годных упражнений слишком мало."""
     mistake_ids = {m.id for m in material.mistakes}
@@ -167,36 +242,53 @@ def build_payload(raw: dict[str, Any], material: Material, rng: random.Random) -
     for item in raw.get("exercises") or []:
         exercise = clean_exercise(item, mistake_ids, rng)
         if exercise:
+            section = item.get("section")
+            if section not in SECTIONS:
+                section = "grammar" if exercise["type"] == "fix" else "topic"
+            exercise["section"] = section
             exercises.append(exercise)
         if len(exercises) >= MAX_EXERCISES:
             break
     if len(exercises) < MIN_EXERCISES:
         raise ValueError(f"only {len(exercises)} valid exercises")
+    # Сначала тема разговора, потом разбор ошибок и грамматика — порядок урока.
+    exercises.sort(key=lambda e: SECTIONS.index(e["section"]))
 
     examples: dict[int, str] = {}
     for card in raw.get("cards") or []:
         if isinstance(card, dict) and (example := _text(card.get("example"), 200)):
             examples.setdefault(card.get("vocab_id"), example)
+    topic_ru = _text(raw.get("topic_ru"), 40) or (material.topics[0] if material.topics else None)
     return {
-        "version": 1,
-        "title": _text(raw.get("title"), 80) or "Урок дня",
+        "version": 2,
+        "title": _text(raw.get("title"), 80) or "Урок по твоим разговорам",
         "topic": _text(raw.get("topic"), 100),
+        "topic_ru": topic_ru,
         "intro_ru": _text(raw.get("intro_ru"), 600),
+        "topic_block": clean_topic_block(raw.get("topic_block")),
+        "mistakes_review": mistakes_review(material),
+        "grammar": clean_grammar(raw.get("grammar"), mistake_ids),
         "exercises": exercises,
         "cards": _cards(material, examples),
         "insights": clean_insights(raw.get("insights")),
-        "based_on": {"mistakes": len(material.mistakes), "words": len(material.vocab)},
+        "based_on": {
+            "mistakes": len(material.mistakes),
+            "words": len(material.vocab),
+            "messages": material.user_messages,
+            "topics": material.topics,
+        },
     }
 
 
 def fallback_payload(material: Material, rng: random.Random) -> dict[str, Any] | None:
-    """Урок без LLM: исправление своих ошибок и карточки слов."""
+    """Урок без LLM: разбор и исправление своих ошибок, карточки слов."""
     exercises = []
     for mistake in material.mistakes[:MAX_EXERCISES]:
         options, answer = _shuffle([mistake.corrected, mistake.original], 0, rng)
         exercises.append(
             {
                 "type": "fix",
+                "section": "grammar",
                 "question_ru": DEFAULT_QUESTIONS["fix"],
                 "explanation_ru": mistake.explanation_ru,
                 "mistake_id": mistake.id,
@@ -208,15 +300,37 @@ def fallback_payload(material: Material, rng: random.Random) -> dict[str, Any] |
     if not exercises and not cards:
         return None
     return {
-        "version": 1,
-        "title": "Повторение",
+        "version": 2,
+        "title": "Разбор ошибок",
         "topic": None,
-        "intro_ru": "Сегодня короткий урок: повторим твои ошибки из разговоров и новые слова.",
+        "topic_ru": material.topics[0] if material.topics else None,
+        "intro_ru": "Сегодня короткий урок: разберём твои ошибки из разговоров и повторим слова.",
+        "topic_block": None,
+        "mistakes_review": mistakes_review(material),
+        "grammar": [],
         "exercises": exercises,
         "cards": cards,
         "insights": None,
-        "based_on": {"mistakes": len(material.mistakes), "words": len(material.vocab)},
+        "based_on": {
+            "mistakes": len(material.mistakes),
+            "words": len(material.vocab),
+            "messages": material.user_messages,
+            "topics": material.topics,
+        },
     }
+
+
+def conversation_transcript(messages: list[Message], user_name: str) -> str:
+    """Последний разговор для урока; если длинный — оставляем конец."""
+    lines = []
+    for message in messages:
+        text = message.text or ""
+        if message.kind == "photo" and message.role == "user":
+            text = f"[photo: {message.photo_caption or 'a photo'}] {text}".strip()
+        if text:
+            lines.append(f"{'Learner' if message.role == 'user' else 'Friend'}: {text}")
+    transcript = "\n".join(lines)
+    return transcript[-TRANSCRIPT_CHARS:]
 
 
 def public_view(lesson: Lesson) -> dict[str, Any]:
@@ -227,6 +341,7 @@ def public_view(lesson: Lesson) -> dict[str, Any]:
         item: dict[str, Any] = {
             "index": index,
             "type": exercise["type"],
+            "section": exercise.get("section", "grammar"),
             "question_ru": exercise["question_ru"],
             "options": exercise["options"],
         }
@@ -243,7 +358,11 @@ def public_view(lesson: Lesson) -> dict[str, Any]:
         "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
         "title": payload["title"],
         "topic": payload.get("topic"),
+        "topic_ru": payload.get("topic_ru"),
         "intro_ru": payload.get("intro_ru"),
+        "topic_block": payload.get("topic_block"),
+        "mistakes_review": payload.get("mistakes_review") or [],
+        "grammar": payload.get("grammar") or [],
         "exercises": exercises,
         "cards": payload.get("cards") or [],
         "insights": payload.get("insights"),
@@ -275,7 +394,11 @@ class LessonService:
 
     async def material(self, session: AsyncSession, user: User) -> Material:
         now = datetime.now(UTC)
-        mistakes = await session.scalars(
+        messages = await self._recent_conversation(session, user, now)
+        recent_ids = {m.id for m in messages if m.role == "user"}
+        topics = Counter(m.topic for m in messages if m.role == "user" and m.topic)
+
+        due = await session.scalars(
             select(Mistake)
             .where(
                 Mistake.user_id == user.id,
@@ -284,9 +407,14 @@ class LessonService:
                     Mistake.next_review_at.is_(None) & Mistake.resolved.is_(False),
                 ),
             )
-            .order_by(Mistake.severity.desc(), Mistake.times_seen.desc(), Mistake.id.desc())
-            .limit(MISTAKES_FOR_LESSON)
+            .order_by(Mistake.id.desc())
+            .limit(MISTAKES_FOR_LESSON * 3)
         )
+        # Ошибки из этого разговора — первыми, дальше самые серьёзные и частые.
+        mistakes = sorted(
+            due,
+            key=lambda m: (m.message_id not in recent_ids, -m.severity, -m.times_seen, -m.id),
+        )[:MISTAKES_FOR_LESSON]
         vocab = await session.scalars(
             select(Vocab)
             .where(
@@ -296,7 +424,34 @@ class LessonService:
             .order_by(Vocab.next_review_at.asc().nulls_last(), Vocab.id.desc())
             .limit(WORDS_FOR_LESSON)
         )
-        return Material(mistakes=list(mistakes), vocab=list(vocab))
+        return Material(
+            mistakes=mistakes,
+            vocab=list(vocab),
+            messages=messages,
+            topics=[topic for topic, _ in topics.most_common(3)],
+        )
+
+    async def _recent_conversation(
+        self, session: AsyncSession, user: User, now: datetime
+    ) -> list[Message]:
+        last_lesson = await session.scalar(
+            select(func.max(Lesson.created_at)).where(Lesson.user_id == user.id)
+        )
+        since = last_lesson or now - CONVERSATION_FALLBACK
+
+        async def load(after: datetime) -> list[Message]:
+            rows = await session.scalars(
+                select(Message)
+                .where(Message.user_id == user.id, Message.created_at > after)
+                .order_by(Message.id.desc())
+                .limit(CONVERSATION_MESSAGES)
+            )
+            return list(reversed(list(rows)))
+
+        messages = await load(since)
+        if sum(1 for m in messages if m.role == "user") < MIN_FRESH_USER_MESSAGES:
+            messages = await load(min(since, now - CONVERSATION_FALLBACK))
+        return messages
 
     async def today(self, session: AsyncSession, user: User) -> list[Lesson]:
         since = repo.day_start_utc(user.timezone)
@@ -391,6 +546,8 @@ class LessonService:
                 for v in material.vocab
             ],
             "mistake_stats_30d": dict(stats.all()),
+            "conversation_topics": material.topics,
+            "conversation": conversation_transcript(material.messages, user.name),
         }
         return json.dumps(data, ensure_ascii=False)
 

@@ -1,4 +1,4 @@
-// Вкладка «Урок»: урок дня — генерация, прохождение, карточки слов, итог.
+// Вкладка «Урок»: урок по последним разговорам — тема, разбор ошибок и грамматика, слова, итог.
 import { api } from "../api.js";
 import {
   button,
@@ -16,12 +16,46 @@ import {
 } from "../ui.js";
 
 const GENERATION_HINTS = [
-  "Перечитываю твои разговоры…",
-  "Выбираю ошибки, которые стоит закрепить…",
-  "Подбираю упражнения под твой уровень…",
-  "Записываю примеры к новым словам…",
+  "Перечитываю ваш разговор…",
+  "Подбираю фразы по теме…",
+  "Разбираю твои ошибки…",
+  "Объясняю правило и готовлю упражнения…",
   "Почти готово…",
 ];
+
+const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : text);
+
+// План урока: 1) тема разговора, 2) разбор ошибок и грамматика.
+function lessonPlan({ topic, mistakes, level, words }) {
+  const item = (num, title, note) =>
+    h(
+      "li",
+      {},
+      h("span", { class: "num", "aria-hidden": "true" }, num),
+      h("div", {}, h("strong", {}, title), note ? h("div", { class: "small muted" }, note) : null),
+    );
+  return h(
+    "ol",
+    { class: "plan" },
+    item("1", topic ? `Тема: ${topic}` : "Тема разговора", "полезные фразы и практика по теме"),
+    item(
+      "2",
+      "Разбор ошибок и грамматика",
+      mistakes
+        ? `${countLabel(mistakes, ["твоя ошибка", "твои ошибки", "твоих ошибок"])} и правило к ним`
+        : `типичные трудности уровня ${level}`,
+    ),
+    words ? item("+", "Слова", `${countLabel(words, ["слово", "слова", "слов"])} на повторение`) : null,
+  );
+}
+
+function topicChips(topics) {
+  return h(
+    "div",
+    { class: "chips" },
+    topics.map((topic) => h("span", { class: "badge" }, `💬 ${topic}`)),
+  );
+}
 
 export async function renderLessonTab(view, ctx) {
   ctx.setTabsVisible(true);
@@ -92,16 +126,20 @@ function renderHome(view, ctx, today) {
 }
 
 function newLessonCard(view, ctx, today, another) {
-  const { mistakes, words } = today.material;
-  const basis =
-    mistakes || words
-      ? `Соберу упражнения из твоих разговоров: ${countLabel(mistakes, ["ошибка", "ошибки", "ошибок"])} и ${countLabel(words, ["слово", "слова", "слов"])} на повторение.`
-      : `Ошибок и новых слов пока мало — урок будет на типичные трудности уровня ${ctx.me.level}.`;
+  const { mistakes, words, messages, topics } = today.material;
+  const talked = messages > 0;
+  const about = talked
+    ? topics.length
+      ? h("div", { class: "stack tight" }, h("div", { class: "small muted" }, "О чём вы говорили"), topicChips(topics))
+      : h("p", {}, `Урок соберу из вашего разговора с ${ctx.me.persona.name}.`)
+    : h("p", {}, `Поболтай с ${ctx.me.persona.name} в чате — и урок будет про ваш разговор. А пока соберу его по твоим интересам и уровню.`);
   return h(
     "section",
     { class: "card hero-card stack" },
-    h("div", {}, h("h2", {}, another ? "Ещё один урок" : "Урок дня 📚"), h("p", {}, basis)),
-    button(another ? "Собрать ещё урок" : "Собрать урок", () => generate(view, ctx)),
+    h("div", {}, h("h2", {}, another ? "Ещё один урок" : "Урок по твоим разговорам")),
+    about,
+    lessonPlan({ topic: topics[0], mistakes, level: ctx.me.level, words }),
+    h("button", { class: "btn big", type: "button", onclick: () => generate(view, ctx) }, "✨ Сгенерировать урок"),
     h(
       "p",
       { class: "tiny muted center" },
@@ -121,6 +159,7 @@ function doneCard(lesson) {
       h("div", {}, h("div", { class: "small muted" }, "Урок пройден ✅"), h("h2", {}, lesson.title)),
       h("div", { class: "badge" }, `${lesson.score ?? 0}/${lesson.total ?? 0}`),
     ),
+    lesson.topic_ru ? topicChips([lesson.topic_ru]) : null,
     insights?.tip_ru ? h("p", { class: "small" }, `💡 ${insights.tip_ru}`) : null,
   );
 }
@@ -156,19 +195,42 @@ async function generate(view, ctx) {
   }
 }
 
-export function playLesson(view, ctx, lesson) {
-  ctx.setTabsVisible(false);
-  const steps = [
+// Шаги урока по разделам: тема → разбор ошибок и правила → слова.
+function lessonSteps(lesson) {
+  const exercises = (section) =>
+    lesson.exercises.filter((e) => e.section === section).map((exercise) => ({ kind: "exercise", section, exercise }));
+  const reviewed = new Set(lesson.mistakes_review.map((m) => m.id));
+  return [
     { kind: "intro" },
-    ...lesson.exercises.map((exercise) => ({ kind: "exercise", exercise })),
-    ...lesson.cards.map((item) => ({ kind: "card", item })),
+    ...(lesson.topic_block ? [{ kind: "topic", section: "topic" }] : []),
+    ...exercises("topic"),
+    ...(reviewed.size ? [{ kind: "review", section: "grammar" }] : []),
+    ...lesson.grammar.map((rule) => ({ kind: "rule", section: "grammar", rule })),
+    ...exercises("grammar"),
+    ...lesson.cards.map((item) => ({ kind: "card", section: "words", item })),
     { kind: "finish" },
   ];
-  const answered = lesson.exercises.filter((e) => e.result).length;
+}
+
+function sectionLabel(lesson, steps, section) {
+  const both = steps.some((s) => s.section === "topic") && steps.some((s) => s.section === "grammar");
+  if (section === "topic") {
+    return `${both ? "Часть 1 · " : ""}Тема${lesson.topic_ru ? `: ${lesson.topic_ru}` : ""}`;
+  }
+  if (section === "grammar") return `${both ? "Часть 2 · " : ""}Ошибки и грамматика`;
+  if (section === "words") return "Слова";
+  return null;
+}
+
+export function playLesson(view, ctx, lesson) {
+  ctx.setTabsVisible(false);
+  const steps = lessonSteps(lesson);
   let position = 0;
-  if (answered) {
-    const firstOpen = lesson.exercises.findIndex((e) => !e.result);
-    position = 1 + (firstOpen === -1 ? lesson.exercises.length : firstOpen);
+  if (lesson.exercises.some((e) => e.result)) {
+    // Продолжаем с первого нерешённого упражнения, показав заново теорию его раздела.
+    position = steps.findIndex((s) => s.kind === "exercise" && !s.exercise.result);
+    if (position === -1) position = steps.findIndex((s) => s.kind === "card" || s.kind === "finish");
+    while (["topic", "review", "rule"].includes(steps[position - 1]?.kind)) position -= 1;
   }
   const leave = () => {
     ctx.setBack(null);
@@ -203,33 +265,105 @@ export function playLesson(view, ctx, lesson) {
       h("span", { class: "tiny muted" }, `${done}/${work}`),
     );
     let body;
-    if (step.kind === "intro") body = introCard(lesson, next);
+    if (step.kind === "intro") body = introCard(lesson, ctx, next);
+    else if (step.kind === "topic") body = topicCard(lesson, next);
+    else if (step.kind === "review") body = reviewCard(lesson, next);
+    else if (step.kind === "rule") body = ruleCard(lesson, step.rule, next);
     else if (step.kind === "exercise") body = exerciseCard(lesson, step.exercise, next);
     else if (step.kind === "card") body = flashcard(step.item, next);
     else body = finishCard(lesson, ctx);
-    mount(view, top, body);
+    const label = sectionLabel(lesson, steps, step.section);
+    mount(view, top, label ? h("div", { class: "section-label" }, label) : null, body);
   };
   show();
 }
 
-function introCard(lesson, next) {
+function introCard(lesson, ctx, next) {
   const words = lesson.cards.length;
   return h(
     "section",
     { class: "card hero-card stack" },
-    h("h2", {}, lesson.title),
-    lesson.intro_ru ? h("p", {}, lesson.intro_ru) : null,
+    h("div", {}, h("h2", {}, lesson.title), lesson.intro_ru ? h("p", {}, lesson.intro_ru) : null),
+    lessonPlan({ topic: lesson.topic_ru, mistakes: lesson.mistakes_review.length, level: ctx.me.level, words }),
     h(
       "p",
-      { class: "small muted" },
-      [
-        countLabel(lesson.exercises.length, ["упражнение", "упражнения", "упражнений"]),
-        words ? countLabel(words, ["слово", "слова", "слов"]) : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      { class: "tiny muted center" },
+      countLabel(lesson.exercises.length, ["упражнение", "упражнения", "упражнений"]),
     ),
     button("Начать", next),
+  );
+}
+
+function topicCard(lesson, next) {
+  const block = lesson.topic_block;
+  return card(
+    h("div", { class: "question-label" }, "О чём вы говорили"),
+    h("h2", {}, capitalize(lesson.topic_ru) || "Ваш разговор"),
+    block.summary_ru ? h("p", { class: "lead" }, block.summary_ru) : null,
+    block.phrases.length
+      ? [
+          h("div", { class: "question-label", style: { marginTop: "16px" } }, "Пригодится в следующий раз"),
+          h(
+            "ul",
+            { class: "phrases" },
+            block.phrases.map((p) =>
+              h(
+                "li",
+                {},
+                h("div", { class: "row spread wrap" }, h("strong", {}, p.en), p.ru ? h("span", { class: "small muted" }, p.ru) : null),
+                p.example ? h("div", { class: "example" }, p.example) : null,
+              ),
+            ),
+          ),
+        ]
+      : null,
+    h("div", { style: { marginTop: "16px" } }, button("Дальше", next)),
+  );
+}
+
+function reviewCard(lesson, next) {
+  return card(
+    h("div", { class: "question-label" }, "Разбор твоих ошибок"),
+    h("p", { class: "small muted" }, "Как ты сказал в чате → как сказал бы носитель"),
+    h(
+      "ul",
+      { class: "list review-list" },
+      lesson.mistakes_review.map((m) =>
+        h(
+          "li",
+          { class: "mistake-pair" },
+          h("div", { class: "row spread" }, h("span", { class: "wrong-text" }, m.original), h("span", { class: "badge" }, m.type_ru)),
+          h("div", { class: "right-text" }, m.corrected),
+          m.explanation_ru ? h("div", { class: "small muted" }, m.explanation_ru) : null,
+        ),
+      ),
+    ),
+    h("div", { style: { marginTop: "16px" } }, button("Дальше", next)),
+  );
+}
+
+function ruleCard(lesson, rule, next) {
+  const own = lesson.mistakes_review.filter((m) => rule.mistake_ids.includes(m.id)).slice(0, 2);
+  return card(
+    h("div", { class: "question-label" }, "Правило"),
+    h("h2", {}, rule.title_ru),
+    h("p", { class: "lead" }, rule.rule_ru),
+    rule.examples.length
+      ? h(
+          "ul",
+          { class: "phrases" },
+          rule.examples.map((e) => h("li", {}, h("strong", {}, e.en), e.ru ? h("div", { class: "small muted" }, e.ru) : null)),
+        )
+      : null,
+    own.length
+      ? h(
+          "div",
+          { class: "callout" },
+          h("div", { class: "small muted" }, own.length > 1 ? "Твои ошибки на это правило" : "Твоя ошибка на это правило"),
+          own.map((m) => h("div", { class: "mistake-pair" }, h("span", { class: "wrong-text" }, m.original), " → ", h("span", { class: "right-text" }, m.corrected))),
+        )
+      : null,
+    h("div", { style: { marginTop: "16px" } }, button("Дальше", next)),
   );
 }
 

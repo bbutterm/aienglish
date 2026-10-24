@@ -1,4 +1,4 @@
-// Вкладка «Прогресс»: серия, ошибки, слова, сильные и слабые стороны.
+// Вкладка «Прогресс»: серия, темы разговоров, ошибки, слова, сильные и слабые стороны.
 import { api } from "../api.js";
 import { activityCalendar, barList, statTile } from "../charts.js";
 import { card, countLabel, errorCard, formatDate, formatNumber, h, loadingCard, mount, pageHead } from "../ui.js";
@@ -35,6 +35,23 @@ function insightsCard(insights) {
       h("p", { class: "tiny muted" }, `По уроку от ${formatDate(insights.date)}`),
     ),
   );
+}
+
+function topicsBlock(topics) {
+  if (!topics.length) return null;
+  return [
+    h("h3", {}, "О чём говорили"),
+    barList({
+      title: "Темы разговоров",
+      subtitle: "реплик за 30 дней",
+      columns: ["Тема", "Реплик"],
+      items: topics.map((t) => ({
+        label: t.topic[0].toUpperCase() + t.topic.slice(1),
+        value: t.messages,
+        note: `ошибок: ${t.mistakes}`,
+      })),
+    }),
+  ];
 }
 
 export async function renderProgress(view, ctx) {
@@ -78,6 +95,7 @@ export async function renderProgress(view, ctx) {
         delta: { text: `голосом: ${decimal(t.voice_minutes)} мин` },
       }),
     ),
+    topicsBlock(p.topics),
     h("h3", {}, "Сильные и слабые стороны"),
     insightsCard(p.insights),
     h("h3", {}, "Активность"),

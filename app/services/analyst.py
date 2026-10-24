@@ -30,6 +30,7 @@ class Analysis:
     mistakes: list[MistakeItem] = field(default_factory=list)
     vocab: list[VocabItem] = field(default_factory=list)
     estimated_level: str | None = None
+    topic: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,17 @@ def parse_analysis(raw: str) -> Analysis:
     level = data.get("estimated_level")
     if isinstance(level, str) and level.strip().upper() in LEVELS:
         analysis.estimated_level = level.strip().upper()
+    analysis.topic = clean_topic(data.get("topic_ru"))
     return analysis
+
+
+def clean_topic(value: object) -> str | None:
+    """Тема для группировки: 1–3 слова в нижнем регистре, без кавычек и точек."""
+    topic = _clean_str(value, 60)
+    if not topic or topic.lower() in {"null", "none", "нет"}:
+        return None
+    topic = " ".join(topic.lower().strip(" .,!?\"'«»").split()[:3])
+    return topic or None
 
 
 def build_analyst_input(

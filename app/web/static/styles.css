@@ -350,6 +350,102 @@ input:focus-visible,
   transition: width 0.3s ease;
 }
 
+.btn.big {
+  padding: 17px 16px;
+  font-size: 17px;
+  border-radius: 14px;
+}
+
+.stack.tight {
+  gap: 6px;
+}
+
+.plan {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.plan .num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--wash);
+  color: var(--link);
+}
+
+.plan strong {
+  display: block;
+  line-height: 26px;
+}
+
+.section-label {
+  margin: -6px 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--section-head);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lead {
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
+.phrases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.phrases li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--separator);
+}
+
+.phrases li:last-child {
+  border-bottom: 0;
+}
+
+.phrases .example {
+  margin-top: 4px;
+  color: var(--hint);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.review-list > li {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.callout {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--wash);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .question-label {
   color: var(--hint);
   font-size: 14px;
