@@ -13,9 +13,17 @@ class TtsCb(CallbackData, prefix="tts"):
     message_id: int
 
 
+class RewriteCb(CallbackData, prefix="rw"):
+    message_id: int  # ответ собеседника; переписываем реплику пользователя перед ним
+
+
+class PingCb(CallbackData, prefix="ping"):
+    on: bool
+
+
 class LevelCb(CallbackData, prefix="lv"):
     level: str
-    src: str  # w — кнопки приветствия, s — экран настроек
+    src: str  # w — кнопки приветствия, s — экран настроек, j — подсказка «проверка уровня»
 
 
 class PersonaCb(CallbackData, prefix="pr"):
@@ -40,8 +48,32 @@ def webapp_kb(url: str, text: str, page: str | None = None) -> InlineKeyboardMar
 
 
 def tts_kb(message_id: int) -> InlineKeyboardMarkup:
+    return reply_kb(message_id, tts=True, rewrite=False)
+
+
+def reply_kb(message_id: int, *, tts: bool, rewrite: bool) -> InlineKeyboardMarkup | None:
+    """Кнопки под ответом собеседника: 🔊 (если он текстом) и «Как сказать лучше»."""
     builder = InlineKeyboardBuilder()
-    builder.button(text=texts.TTS_BUTTON, callback_data=TtsCb(message_id=message_id))
+    if tts:
+        builder.button(text=texts.TTS_BUTTON, callback_data=TtsCb(message_id=message_id))
+    if rewrite:
+        builder.button(text=texts.REWRITE_BUTTON, callback_data=RewriteCb(message_id=message_id))
+    if not tts and not rewrite:
+        return None
+    return builder.as_markup()
+
+
+def level_hint_kb(estimated: str, current: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=texts.HINT_LEVEL_YES.format(level=estimated),
+        callback_data=LevelCb(level=estimated, src="j"),
+    )
+    builder.button(
+        text=texts.HINT_LEVEL_NO.format(level=current),
+        callback_data=LevelCb(level=current, src="j"),
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -57,8 +89,11 @@ def _mark(selected: bool, label: str) -> str:
     return f"✓ {label}" if selected else label
 
 
-def settings_kb(user: User) -> InlineKeyboardMarkup:
-    """Все настройки на одном экране: каждый ряд — одна настройка, выбранное отмечено ✓."""
+def settings_kb(user: User, ping: bool = False) -> InlineKeyboardMarkup:
+    """Все настройки на одном экране: каждый ряд — одна настройка, выбранное отмечено ✓.
+
+    ping — показывать ли ряд «Друг пишет первым» (если фича включена).
+    """
     builder = InlineKeyboardBuilder()
     for mode, label in texts.VOICE_BUTTONS.items():
         builder.button(
@@ -77,9 +112,12 @@ def settings_kb(user: User) -> InlineKeyboardMarkup:
         )
     for mode, label in texts.MODE_BUTTONS.items():
         builder.button(text=_mark(user.mode == mode, label), callback_data=ModeCb(mode=mode))
-    builder.adjust(
-        len(texts.VOICE_BUTTONS), len(PERSONAS), len(LEVEL_CODES), len(texts.MODE_BUTTONS)
-    )
+    rows = [len(texts.VOICE_BUTTONS), len(PERSONAS), len(LEVEL_CODES), len(texts.MODE_BUTTONS)]
+    if ping:
+        for on, label in texts.PING_BUTTONS.items():
+            builder.button(text=_mark(user.ping_enabled == on, label), callback_data=PingCb(on=on))
+        rows.append(len(texts.PING_BUTTONS))
+    builder.adjust(*rows)
     return builder.as_markup()
 
 

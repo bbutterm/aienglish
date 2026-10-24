@@ -19,6 +19,7 @@ from sqlalchemy import (
     false,
     func,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -57,6 +58,18 @@ class User(Base):
     premium_until: Mapped[datetime | None]  # премиум активен, пока это время в будущем
     blocked: Mapped[bool] = mapped_column(default=False, server_default=false())
     last_review_at: Mapped[datetime | None]
+    # Откуда пришёл: параметр /start (src_<кампания>, ref_<id>, landing…) — для маркетинга
+    source: Mapped[str | None]
+    referred_by: Mapped[int | None] = mapped_column(BigInteger)
+    referral_rewarded: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # «Друг пишет первым»: можно выключить в настройках; после 3 сообщений без ответа — пауза
+    ping_enabled: Mapped[bool] = mapped_column(default=True, server_default=true())
+    last_ping_at: Mapped[datetime | None]
+    pings_unanswered: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Ролевая миссия, которая сейчас идёт в чате: цели, выполненные цели, роль собеседника
+    active_mission: Mapped[dict[str, Any] | None]
+    # Подсказки первых дней, которые уже показаны (ключи из app/services/journey.py)
+    hints: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
     streak_days: Mapped[int] = mapped_column(default=0, server_default="0")
     last_active_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -110,7 +123,10 @@ class Vocab(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
     term: Mapped[str]
     translation_ru: Mapped[str | None]
-    source: Mapped[str | None]  # bot|user|photo
+    source: Mapped[str | None]  # bot|user|photo|upgrade|forward
+    # Для «прокачки слов»: какое простое слово заменяет (very big) и фраза ученика с новым словом
+    note: Mapped[str | None]
+    example: Mapped[str | None]
     status: Mapped[str] = mapped_column(default="new", server_default="new")
     ease: Mapped[float] = mapped_column(REAL, default=2.5, server_default="2.5")
     interval_days: Mapped[float] = mapped_column(REAL, default=0, server_default="0")
@@ -161,4 +177,52 @@ class AudioCache(Base):
     key: Mapped[str] = mapped_column(primary_key=True)
     content: Mapped[bytes] = mapped_column(LargeBinary)
     mime: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class FeatureFlag(Base):
+    """Включённость фич из app/features.py; нет строки — действует значение по умолчанию."""
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    enabled: Mapped[bool]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class TopicIdea(Base):
+    """«Темы для тебя»: заголовок виден сразу, содержание генерируется по нажатию."""
+
+    __tablename__ = "topic_ideas"
+    __table_args__ = (Index("ix_topic_ideas_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str]  # talk|mission
+    title_ru: Mapped[str]
+    title_en: Mapped[str | None]
+    focus_ru: Mapped[str | None]  # что потренируешь: «Present Perfect», «сравнения»
+    content: Mapped[dict[str, Any] | None]
+    status: Mapped[str] = mapped_column(
+        default="new", server_default="new"
+    )  # new|opened|started|done
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    started_at: Mapped[datetime | None]
+
+
+class Podcast(Base):
+    """«Подкаст про тебя»: сценарий и склеенная озвучка двумя голосами."""
+
+    __tablename__ = "podcasts"
+    __table_args__ = (Index("ix_podcasts_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    title: Mapped[str]
+    script: Mapped[
+        dict[str, Any]
+    ]  # {"lines": [{"speaker": "jake", "text": "..."}], "words": [...]}
+    audio: Mapped[bytes | None] = mapped_column(LargeBinary)
+    mime: Mapped[str | None]
+    chars: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

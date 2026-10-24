@@ -11,7 +11,8 @@ from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
-from app.bot.keyboards import tts_kb
+from app.bot.after_turn import after_turn, photo_words
+from app.bot.keyboards import reply_kb
 from app.db import repo
 from app.db.models import Message, User
 from app.llm.openrouter import LLMError
@@ -88,14 +89,25 @@ async def deliver_reply(
     *,
     voice: bool = False,
     transcript: str | None = None,
+    rewrite: bool = False,
 ) -> None:
-    """Один ответ — одно сообщение: голосовое с текстом в подписи или текст с кнопкой 🔊."""
+    """Один ответ — одно сообщение: голосовое с текстом в подписи или текст с кнопкой 🔊.
+
+    rewrite — добавить кнопку «Как сказать лучше» (переписать реплику пользователя).
+    """
     reply_text = (reply.text or "")[:MAX_REPLY_CHARS]
     if voice:
         caption = voice_caption(reply_text, transcript)
         if caption is not None:
             status = await dialog.speak(
-                bot, chat_id, session, user, reply, caption=caption, notify_limit=True
+                bot,
+                chat_id,
+                session,
+                user,
+                reply,
+                caption=caption,
+                notify_limit=True,
+                reply_markup=reply_kb(reply.id, tts=False, rewrite=rewrite),
             )
             if status is SpeakStatus.SENT:
                 return
@@ -103,7 +115,9 @@ async def deliver_reply(
     text = format_reply_html(reply_text)
     if transcript:
         text = transcript_quote(transcript, MAX_QUOTE) + text
-    sent = await bot.send_message(chat_id, text, reply_markup=tts_kb(reply.id))
+    sent = await bot.send_message(
+        chat_id, text, reply_markup=reply_kb(reply.id, tts=True, rewrite=rewrite)
+    )
     reply.tg_message_id = sent.message_id
     await session.commit()
 
@@ -136,6 +150,7 @@ async def respond(
         return
 
     transcript = text if kind == "voice" and dialog.settings.show_transcript else None
+    flags = await dialog.features.snapshot()
     await deliver_reply(
         bot,
         chat_id,
@@ -145,7 +160,13 @@ async def respond(
         turn.reply,
         voice=wants_voice(user, kind),
         transcript=transcript,
+        rewrite=flags["native_rewrite"] and bool(text and text.strip()),
     )
+    if kind == "photo" and image is not None and flags["photo_words"]:
+        dialog.tasks.spawn(
+            photo_words(bot, chat_id, user.id, dialog, image), name=f"photo-words:{user.id}"
+        )
+    await after_turn(bot, chat_id, session, user, dialog, turn)
 
     if await dialog.review_due(session, user):
         if turn.analysis is not None:

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
     admin_ids: Annotated[list[int], NoDecode] = []
+    bot_username: str = ""  # для ссылок-приглашений; пусто — узнаём у Telegram (getMe)
 
     # LLM (OpenRouter)
     openrouter_api_key: str

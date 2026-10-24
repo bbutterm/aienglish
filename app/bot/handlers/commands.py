@@ -4,6 +4,7 @@ from aiogram.types import Message as TgMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
+from app.bot.after_turn import finish_mission
 from app.bot.handlers.common import send_opener
 from app.bot.keyboards import webapp_kb
 from app.bot.onboarding import welcome
@@ -65,6 +66,16 @@ async def cmd_reset(
         await message.answer(texts.LIMIT_REACHED.format(limit=limit))
         return
     await send_opener(bot, message.chat.id, session, user, dialog, reason="reset")
+
+
+@router.message(Command("stop"))
+async def cmd_stop(
+    message: TgMessage, session: AsyncSession, user: User, dialog: DialogService, bot: Bot
+) -> None:
+    if not user.active_mission:
+        await message.answer(texts.NO_MISSION)
+        return
+    await finish_mission(bot, message.chat.id, session, user, dialog, completed=False)
 
 
 @router.message(Command("app"))

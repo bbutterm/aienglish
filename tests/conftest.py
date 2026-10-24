@@ -12,9 +12,9 @@ import httpx
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import EditMessageText, GetFile, SendAudio, SendMessage, SendVoice
+from aiogram.methods import EditMessageText, GetFile, GetMe, SendAudio, SendMessage, SendVoice
 from aiogram.methods.base import TelegramMethod
-from aiogram.types import Chat, File, Message, Voice
+from aiogram.types import Chat, File, Message, User, Voice
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -58,8 +58,8 @@ async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessio
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE users, messages, mistakes, vocab, usage, lessons, audio_cache "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE users, messages, mistakes, vocab, usage, lessons, audio_cache, "
+                "feature_flags, topic_ideas, podcasts RESTART IDENTITY CASCADE"
             )
         )
     return create_session_factory(engine)
@@ -98,6 +98,7 @@ class FakeAPIs:
         self.stt_text = "I go to cinema yesterday"
         self.lesson_mode = "ok"  # ok | garbage | error
         self.topic: str | None = "Кино."  # тема реплики от аналитика (сырая, как от модели)
+        self.estimated_level = "A2"
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "openrouter.ai":
@@ -126,7 +127,18 @@ class FakeAPIs:
             if self.lesson_mode == "garbage":
                 return "Sorry, here is no JSON"
             return json.dumps(fake_lesson(json.loads(body["messages"][1]["content"])))
-        if body.get("response_format"):
+        if system.startswith("You suggest personal conversation topics"):
+            return json.dumps(FAKE_IDEAS, ensure_ascii=False)
+        if system.startswith("You prepare a short"):
+            mission = "play a role-play scene" in system
+            return json.dumps(FAKE_MISSION if mission else FAKE_TALK, ensure_ascii=False)
+        if system.startswith("You help"):
+            return json.dumps(FAKE_REWRITE, ensure_ascii=False)
+        if system.startswith("You pick English words"):
+            return json.dumps(FAKE_WORDS, ensure_ascii=False)
+        if system.startswith("You write a short, warm, funny two-host podcast"):
+            return json.dumps(FAKE_PODCAST, ensure_ascii=False)
+        if system.startswith("You analyse ONE message"):
             learner = body["messages"][-1]["content"]
             mistakes = []
             if "I go to cinema" in learner:
@@ -139,14 +151,30 @@ class FakeAPIs:
                         "severity": 2,
                     }
                 )
+            upgrades = []
+            if "very big" in learner:
+                upgrades.append(
+                    {
+                        "basic": "very big",
+                        "better": "huge",
+                        "translation_ru": "огромный",
+                        "example": "My new monitor is huge.",
+                    }
+                )
+            keywords = ("broken", "refund", "no thanks")
+            goals_done = [i for i, k in enumerate(keywords) if k in learner.lower()]
+            if "goals_done" not in system:
+                goals_done = []
             return json.dumps(
                 {
                     "mistakes": mistakes,
                     "vocab": [
                         {"term": "Blockbuster", "translation_ru": "блокбастер", "source": "bot"}
                     ],
-                    "estimated_level": "A2",
+                    "estimated_level": self.estimated_level,
                     "topic_ru": self.topic,
+                    "upgrades": upgrades,
+                    "goals_done": goals_done,
                 },
                 ensure_ascii=False,
             )
@@ -167,6 +195,76 @@ class FakeAPIs:
 
     def lesson_requests(self) -> list[dict[str, Any]]:
         return [r for r in self.llm_requests if is_lesson_request(r)]
+
+
+FAKE_IDEAS = {
+    "ideas": [
+        {
+            "kind": "talk",
+            "title_ru": "Самый странный баг в твоей карьере",
+            "title_en": "The weirdest bug of your career",
+            "focus_ru": "Past Simple",
+        },
+        {
+            "kind": "talk",
+            "title_ru": "MacBook или Windows: спорим",
+            "title_en": "MacBook vs Windows",
+            "focus_ru": "сравнения",
+        },
+        {"kind": "talk", "title_ru": "", "title_en": "empty is dropped"},
+        {
+            "kind": "mission",
+            "title_ru": "Верни ноутбук с битым пикселем",
+            "title_en": "Return a laptop with a dead pixel",
+            "focus_ru": "вежливые просьбы",
+        },
+    ]
+}
+FAKE_TALK = {
+    "intro_ru": "Поговорим о багах.",
+    "phrases": [{"en": "to fix a bug", "ru": "починить баг"}],
+    "questions": ["What happened?", "How did you fix it?"],
+    "tip_ru": "Past Simple: fixed, found.",
+}
+FAKE_MISSION = {
+    "intro_ru": "Сцена в магазине.",
+    "role_en": "a shop assistant at an electronics store",
+    "setting_en": "The learner comes back with a laptop bought last week.",
+    "setting_ru": "Ты возвращаешь ноутбук в магазин.",
+    "goals": [
+        {"en": "explain what is wrong with the laptop", "ru": "Объясни, что не так"},
+        {"en": "ask for a refund", "ru": "Попроси вернуть деньги"},
+        {"en": "politely refuse a store credit", "ru": "Вежливо откажись от бонусов"},
+    ],
+    "phrases": [{"en": "I'd like a refund", "ru": "Я хочу вернуть деньги"}],
+}
+FAKE_REWRITE = {
+    "native": "I've been working here for three years.",
+    "changes": [
+        {"from": "am working", "to": "have been working", "why_ru": "действие длится"},
+        {"from": "since", "to": "for", "why_ru": "с длительностью — for"},
+    ],
+}
+FAKE_WORDS = {
+    "summary_ru": "Пост о запуске нового ноутбука.",
+    "words": [
+        {"term": "mug", "translation_ru": "кружка", "example": "A mug of coffee."},
+        {"term": "windowsill", "translation_ru": "подоконник", "example": "On the windowsill."},
+    ],
+}
+FAKE_PODCAST = {
+    "title": "Неделя кино и ноутбуков",
+    "lines": [
+        {"speaker": "jake", "text": "Hey Alex! Big week, huh?"},
+        {"speaker": "emma", "text": "You talked about films a lot."},
+        {"speaker": "jake", "text": "You said I go to cinema yesterday."},
+        {"speaker": "emma", "text": "We'd say: I went to the cinema yesterday."},
+        {"speaker": "narrator", "text": "dropped: unknown speaker"},
+        {"speaker": "jake", "text": "What will you watch this weekend?"},
+    ],
+    "words": [{"en": "blockbuster", "ru": "блокбастер"}],
+    "question": "What will you watch this weekend?",
+}
 
 
 def is_lesson_request(body: dict[str, Any]) -> bool:
@@ -292,6 +390,8 @@ class FakeTelegramSession(BaseSession):
             return Message(**fields)
         if isinstance(method, GetFile):
             return File(file_id=method.file_id, file_unique_id="u", file_path="voice/file.oga")
+        if isinstance(method, GetMe):
+            return User(id=123456, is_bot=True, first_name="Buddy", username="buddy_test_bot")
         return True
 
     async def stream_content(

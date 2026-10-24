@@ -1,9 +1,10 @@
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from app.config import Settings
-from app.db.repo import MistakeItem, VocabItem
+from app.db.repo import MistakeItem, UpgradeItem, VocabItem
 from app.llm.jsonutil import extract_json_object
 from app.llm.openrouter import LLMResult, OpenRouterClient
 from app.prompts import render
@@ -23,6 +24,7 @@ MISTAKE_TYPES = {
 LEVELS = {"A1", "A2", "B1", "B2", "C1", "C2"}
 MAX_MISTAKES = 5
 MAX_VOCAB = 3
+MAX_UPGRADES = 2
 
 
 @dataclass
@@ -31,6 +33,8 @@ class Analysis:
     vocab: list[VocabItem] = field(default_factory=list)
     estimated_level: str | None = None
     topic: str | None = None
+    upgrades: list[UpgradeItem] = field(default_factory=list)
+    goals_done: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -46,8 +50,11 @@ def _clean_str(value: object, limit: int = 300) -> str | None:
     return value[:limit] if value else None
 
 
-def parse_analysis(raw: str) -> Analysis:
-    """Терпимый к мусору разбор JSON аналитика: невалидные элементы отбрасываются."""
+def parse_analysis(raw: str, goals: int = 0) -> Analysis:
+    """Терпимый к мусору разбор JSON аналитика: невалидные элементы отбрасываются.
+
+    goals — сколько целей у идущей миссии: индексы вне диапазона отбрасываются.
+    """
     data = extract_json_object(raw)
 
     analysis = Analysis()
@@ -98,7 +105,36 @@ def parse_analysis(raw: str) -> Analysis:
     if isinstance(level, str) and level.strip().upper() in LEVELS:
         analysis.estimated_level = level.strip().upper()
     analysis.topic = clean_topic(data.get("topic_ru"))
+    analysis.upgrades = parse_upgrades(data.get("upgrades"))
+    done = data.get("goals_done")
+    if isinstance(done, list):
+        analysis.goals_done = sorted(
+            {i for i in done if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < goals}
+        )
     return analysis
+
+
+def parse_upgrades(raw: object) -> list[UpgradeItem]:
+    """«Прокачка слов»: простое слово → более сильное, на фразе ученика."""
+    upgrades: list[UpgradeItem] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        basic = _clean_str(item.get("basic"), 60)
+        better = _clean_str(item.get("better"), 60)
+        if not basic or not better or basic.lower() == better.lower():
+            continue
+        upgrades.append(
+            UpgradeItem(
+                basic=basic.lower(),
+                better=better.lower(),
+                translation_ru=_clean_str(item.get("translation_ru"), 100),
+                example=_clean_str(item.get("example"), 300),
+            )
+        )
+        if len(upgrades) >= MAX_UPGRADES:
+            break
+    return upgrades
 
 
 def clean_topic(value: object) -> str | None:
@@ -136,12 +172,18 @@ class Analyst:
         prev_bot_text: str | None,
         bot_reply: str | None,
         is_voice: bool,
+        upgrades: bool = False,
+        goals: Sequence[str] = (),
     ) -> AnalystResult:
+        system = render(
+            "analyst_system.md.j2",
+            level=level,
+            is_voice=is_voice,
+            upgrades=upgrades,
+            goals=list(goals),
+        )
         messages = [
-            {
-                "role": "system",
-                "content": render("analyst_system.md.j2", level=level, is_voice=is_voice),
-            },
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": build_analyst_input(
@@ -160,4 +202,4 @@ class Analyst:
             json_mode=True,
             reasoning_effort=self._settings.analyst_reasoning_effort or None,
         )
-        return AnalystResult(analysis=parse_analysis(result.text), llm=result)
+        return AnalystResult(analysis=parse_analysis(result.text, len(goals)), llm=result)

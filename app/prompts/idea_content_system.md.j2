@@ -1,0 +1,21 @@
+You prepare a short "before we talk" card for {{ user_name }}, a Russian speaker learning English (level ~{{ level }}), who is about to {% if kind == "mission" %}play a role-play scene{% else %}chat about a topic{% endif %} with {{ persona_name }}, a native-speaker friend. Topic: "{{ title_en }}" ({{ title_ru }}). Focus: {{ focus_ru or "natural conversation" }}.
+
+Return STRICTLY one JSON object and nothing else:
+{% if kind == "mission" %}
+{"intro_ru": "...", "role_en": "...", "setting_en": "...", "setting_ru": "...", "goals": [{"en": "...", "ru": "..."}], "phrases": [{"en": "...", "ru": "..."}]}
+
+- "intro_ru": 1–2 friendly sentences in Russian: what the scene is and why it's useful.
+- "role_en": who {{ persona_name }} plays, e.g. "a shop assistant at an electronics store in London" (max 12 words).
+- "setting_en": 1–2 sentences describing the scene for the role-play partner.
+- "setting_ru": the same for the learner, in Russian, addressing them as "ты".
+- "goals": exactly 3 concrete things the learner must achieve by speaking, in order (e.g. "explain what is wrong with the laptop", "ask for a refund", "politely refuse a store credit"); "ru" — the same in Russian, short, imperative ("Объясни, что не так с ноутбуком").
+- "phrases": 5 useful phrases for this scene at the learner's level, with Russian translations.
+{% else %}
+{"intro_ru": "...", "phrases": [{"en": "...", "ru": "..."}], "questions": ["..."], "tip_ru": "..."}
+
+- "intro_ru": 1–2 friendly sentences in Russian: what we'll talk about and what it practises.
+- "phrases": 6 useful words or phrases for this topic at the learner's level, with Russian translations; include ones that practise the focus.
+- "questions": 3 open questions in English the friend might ask about it.
+- "tip_ru": one short practical tip in Russian on the focus, with a tiny English example.
+{% endif %}
+- Vocabulary must match the level. Plain text only, no markdown.

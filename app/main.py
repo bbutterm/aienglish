@@ -14,11 +14,15 @@ from app.bot.handlers import build_router
 from app.bot.middlewares import DbSessionMiddleware, UserMiddleware
 from app.config import Settings, get_settings
 from app.db.session import create_engine, create_session_factory
+from app.features import FeatureFlags
 from app.llm.openrouter import OpenRouterClient
 from app.services.analyst import Analyst
 from app.services.companion import Companion
 from app.services.dialog import BackgroundTasks, DialogService
+from app.services.extract import WordExtractor
 from app.services.memory import Memory
+from app.services.pings import PingScheduler
+from app.services.rewrite import Rewriter
 from app.services.stt import SpeechToText
 from app.services.tts import TextToSpeech
 
@@ -29,6 +33,7 @@ BOT_COMMANDS = [
     BotCommand(command="mistakes", description="Последние ошибки"),
     BotCommand(command="review", description="Разбор ошибок"),
     BotCommand(command="reset", description="Новая тема"),
+    BotCommand(command="stop", description="Выйти из ролевой сцены"),
     BotCommand(command="app", description="Уроки и прогресс"),
     BotCommand(command="help", description="Как это работает"),
 ]
@@ -56,6 +61,7 @@ def build_dialog(
     session_factory: async_sessionmaker[AsyncSession],
     http: httpx.AsyncClient,
     tasks: BackgroundTasks,
+    features: FeatureFlags | None = None,
 ) -> DialogService:
     llm = build_llm(settings, http)
     return DialogService(
@@ -67,6 +73,9 @@ def build_dialog(
         stt=SpeechToText(http, settings),
         tts=TextToSpeech(http, settings),
         tasks=tasks,
+        features=features or FeatureFlags(session_factory),
+        rewriter=Rewriter(llm, settings),
+        extractor=WordExtractor(llm, settings),
     )
 
 
@@ -82,6 +91,7 @@ def build_dispatcher(
     dp.include_router(build_router())
     dp["settings"] = settings
     dp["dialog"] = dialog
+    dp["features"] = dialog.features
     return dp
 
 
@@ -105,9 +115,13 @@ async def run(settings: Settings) -> None:
                     text=texts.APP_MENU_BUTTON, web_app=WebAppInfo(url=settings.webapp_url)
                 )
             )
+        # «Друг пишет первым» — фоновый планировщик в процессе бота.
+        pings = asyncio.create_task(PingScheduler(bot, dialog, session_factory).run())
         logger.info("Starting long polling")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if "pings" in locals():
+            pings.cancel()
         await tasks.drain()
         await bot.session.close()
         await http.aclose()

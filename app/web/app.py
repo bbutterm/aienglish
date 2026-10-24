@@ -2,15 +2,13 @@
 
 import hashlib
 import logging
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
 from aiogram import Bot
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -20,18 +18,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bot import texts
 from app.bot.handlers.common import send_opener
 from app.config import Settings
-from app.db import repo
 from app.db.models import Lesson, User, Vocab
+from app.features import FeatureFlags
 from app.main import build_dialog, build_llm
 from app.personas import get_persona
 from app.services import admin as admin_service
-from app.services.dialog import BackgroundTasks, DialogService
+from app.services.dialog import BackgroundTasks
+from app.services.ideas import IdeaService
 from app.services.lessons import LessonError, LessonService, public_view
 from app.services.plans import extend_premium, is_premium, limits_for
+from app.services.podcast import PodcastService
 from app.services.progress import build_progress
 from app.services.srs import review_card
 from app.services.tts import TextToSpeech
-from app.web.auth import InitDataError, parse_init_data
+from app.web import features_api
+from app.web.deps import (
+    AdminDep,
+    SessionDep,
+    StateDep,
+    UserDep,
+    WebState,
+    api_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +56,6 @@ LESSON_ERRORS = {
 }
 
 
-@dataclass
-class WebState:
-    settings: Settings
-    session_factory: async_sessionmaker[AsyncSession]
-    lessons: LessonService
-    dialog: DialogService
-    bot: Bot
-    tasks: BackgroundTasks
-
-
 def build_state(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
@@ -65,73 +63,25 @@ def build_state(
     bot: Bot,
 ) -> WebState:
     tasks = BackgroundTasks()
+    llm = build_llm(settings, http)
+    tts = TextToSpeech(http, settings)
+    features = FeatureFlags(session_factory)
     return WebState(
         settings=settings,
         session_factory=session_factory,
-        lessons=LessonService(build_llm(settings, http), TextToSpeech(http, settings), settings),
-        dialog=build_dialog(settings, session_factory, http, tasks),
+        lessons=LessonService(llm, tts, settings),
+        dialog=build_dialog(settings, session_factory, http, tasks, features),
         bot=bot,
         tasks=tasks,
+        features=features,
+        ideas=IdeaService(llm, settings),
+        podcasts=PodcastService(llm, tts, settings),
     )
-
-
-def api_error(status: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status, detail={"code": code, "message": message})
 
 
 def lesson_error(exc: LessonError) -> HTTPException:
     status, message = LESSON_ERRORS.get(exc.code, (400, "Ошибка урока."))
     return api_error(status, exc.code, message)
-
-
-# --- зависимости ---
-
-
-def get_state(request: Request) -> WebState:
-    return request.app.state.web
-
-
-async def get_session(
-    state: Annotated[WebState, Depends(get_state)],
-) -> AsyncIterator[AsyncSession]:
-    async with state.session_factory() as session:
-        yield session
-
-
-async def get_user(
-    request: Request,
-    state: Annotated[WebState, Depends(get_state)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> User:
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("tma "):
-        raise api_error(401, "unauthorized", "Открой приложение из Telegram.")
-    try:
-        tg_user = parse_init_data(
-            header[4:],
-            state.settings.telegram_bot_token,
-            timedelta(hours=state.settings.init_data_ttl_hours),
-        )
-    except InitDataError as exc:
-        raise api_error(401, "unauthorized", "Сессия устарела — открой приложение заново.") from exc
-    user = await repo.upsert_user(session, tg_user.id, tg_user.username, tg_user.first_name)
-    if user.blocked:
-        raise api_error(403, "blocked", "Доступ закрыт.")
-    return user
-
-
-async def get_admin(
-    user: Annotated[User, Depends(get_user)], state: Annotated[WebState, Depends(get_state)]
-) -> User:
-    if user.id not in state.settings.admin_ids:
-        raise api_error(403, "forbidden", "Раздел только для админов.")
-    return user
-
-
-StateDep = Annotated[WebState, Depends(get_state)]
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
-UserDep = Annotated[User, Depends(get_user)]
-AdminDep = Annotated[User, Depends(get_admin)]
 
 
 async def own_lesson(session: AsyncSession, user: User, lesson_id: int) -> Lesson:
@@ -228,6 +178,7 @@ def create_app(state: WebState) -> FastAPI:
             "premium": is_premium(user),
             "premium_until": user.premium_until.isoformat() if user.premium_until else None,
             "limits": {"messages": limits.messages, "tts": limits.tts, "lessons": limits.lessons},
+            "features": await state.features.snapshot(),
         }
 
     @app.get("/api/lessons/today")
@@ -381,6 +332,7 @@ def create_app(state: WebState) -> FastAPI:
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+    app.include_router(features_api.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
 
@@ -390,6 +342,9 @@ def vocab_view(card: Vocab, now: datetime) -> dict[str, Any]:
         "id": card.id,
         "term": card.term,
         "translation_ru": card.translation_ru,
+        "source": card.source,
+        "note": card.note,
+        "example": card.example,
         "status": card.status,
         "due": card.next_review_at is None or card.next_review_at <= now,
         "next_review_at": card.next_review_at.isoformat() if card.next_review_at else None,

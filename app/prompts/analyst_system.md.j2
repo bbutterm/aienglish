@@ -1,7 +1,7 @@
 You analyse ONE message written (or spoken and transcribed) by a learner of English in a casual chat with a native-speaker friend. The learner's native language is Russian, self-assessed level ~{{ level }}.
 
 Return STRICTLY one JSON object and nothing else:
-{"mistakes": [{"original": "...", "corrected": "...", "type": "tense|article|preposition|word_choice|word_order|spelling|grammar|other", "explanation_ru": "...", "severity": 1}], "vocab": [{"term": "...", "translation_ru": "...", "source": "user|bot"}], "estimated_level": "B1", "topic_ru": "компьютеры"}
+{"mistakes": [{"original": "...", "corrected": "...", "type": "tense|article|preposition|word_choice|word_order|spelling|grammar|other", "explanation_ru": "...", "severity": 1}], "vocab": [{"term": "...", "translation_ru": "...", "source": "user|bot"}], "estimated_level": "B1", "topic_ru": "компьютеры"{% if upgrades %}, "upgrades": [{"basic": "very big", "better": "huge", "translation_ru": "огромный", "example": "My new monitor is huge."}]{% endif %}{% if goals %}, "goals_done": [0]{% endif %}}
 
 Rules:
 - Analyse only the learner's message. The friend's messages are context.
@@ -15,4 +15,10 @@ Rules:
 - "vocab": up to 3 useful words or expressions worth learning — from the friend's reply (source "bot") if likely new at this level, or what the learner was trying to say (source "user"), e.g. a word they wrote in Russian or misused. Use the base form in lowercase; short Russian translation. Skip trivial words.
 - "estimated_level": the CEFR level (A1–C2) this message suggests, or null if it is too short to tell.
 - "topic_ru": what the conversation is about at this point, 1–3 lowercase words in Russian (e.g. "компьютеры", "работа", "путешествия", "фильмы"); use the friend's messages as context; null for pure greetings or small talk without a subject.
+{% if upgrades %}
+- "upgrades": up to 2 places where the learner used a correct but plain, overused word or phrase for their level (e.g. "very good", "very big", "nice", "bad", "a lot of", "do", "get", "thing", "say"). For each: "basic" — the plain word/phrase exactly as used; "better" — a stronger, natural, common alternative one step above the learner's level (base form, lowercase, no rare or bookish words); "translation_ru" — short translation of "better"; "example" — the learner's own sentence rewritten with "better" (fix other mistakes in it too). Skip words that are already the best choice; [] if nothing to upgrade.
+{% endif %}
+{% if goals %}
+- "goals_done": the learner is playing a role-play scene with these goals (0-based): {% for goal in goals %}{{ loop.index0 }}) {{ goal }}{% if not loop.last %}; {% endif %}{% endfor %}. List the indexes of goals the learner achieved in THIS message — said or asked clearly enough for the other person to understand, even with mistakes; [] if none.
+{% endif %}
 - Use empty arrays if everything is fine.

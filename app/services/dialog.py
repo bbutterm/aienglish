@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 from aiogram.types import Message as TgMessage
 from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy import update
@@ -17,11 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.db import repo
 from app.db.models import Message, User
+from app.features import FeatureFlags
 from app.personas import get_persona
 from app.services.analyst import Analyst
 from app.services.companion import Companion, OpenerReason
+from app.services.extract import WordExtractor
 from app.services.memory import Memory
+from app.services.missions import apply_goals, is_expired, pending_goals
 from app.services.plans import limits_for
+from app.services.rewrite import Rewriter
 from app.services.stt import SpeechToText
 from app.services.tts import TextToSpeech, TTSError, prepare_tts_text
 from app.services.usage import record_llm, record_usage, stt_cost, tts_cost
@@ -90,8 +94,14 @@ class DialogService:
         stt: SpeechToText,
         tts: TextToSpeech,
         tasks: BackgroundTasks,
+        features: FeatureFlags,
+        rewriter: Rewriter,
+        extractor: WordExtractor,
     ) -> None:
         self.settings = settings
+        self.features = features
+        self.rewriter = rewriter
+        self.extractor = extractor
         self.session_factory = session_factory
         self.companion = companion
         self.analyst = analyst
@@ -122,6 +132,12 @@ class DialogService:
         image: bytes | None = None,
         tg_message_id: int | None = None,
     ) -> Turn:
+        if user.pings_unanswered:
+            user.pings_unanswered = 0  # ответил — «друг пишет первым» снова может писать
+        if user.active_mission and (
+            is_expired(user.active_mission) or not await self.features.enabled("missions")
+        ):
+            user.active_mission = None
         summary, history = await self.memory.context(session, user)
         user_message = await repo.add_message(
             session,
@@ -155,6 +171,8 @@ class DialogService:
                     prev_bot_text=prev_bot,
                     bot_reply=reply.text,
                     kind=kind,
+                    upgrades=await self.features.enabled("word_upgrades"),
+                    goals=pending_goals(user.active_mission),
                 ),
                 name=f"analyst:{user.id}",
             )
@@ -187,21 +205,35 @@ class DialogService:
         prev_bot_text: str | None,
         bot_reply: str,
         kind: str,
-    ) -> None:
+        upgrades: bool = False,
+        goals: list[str] | None = None,
+    ) -> list[int]:
+        """Разбор реплики в фоне. Возвращает только что выполненные цели миссии."""
         result = await self.analyst.analyze(
             level=level,
             user_text=user_text,
             prev_bot_text=prev_bot_text,
             bot_reply=bot_reply,
             is_voice=kind == "voice",
+            upgrades=upgrades,
+            goals=goals or (),
         )
         analysis = result.analysis
         vocab = analysis.vocab
         if kind == "photo":
             vocab = [replace(v, source="photo") if v.source == "bot" else v for v in vocab]
+        if upgrades:
+            vocab = [*vocab, *(u.as_vocab() for u in analysis.upgrades)]
+        new_goals: list[int] = []
         async with self.session_factory() as session:
             await repo.save_mistakes(session, user_id, message_id, analysis.mistakes)
             await repo.save_vocab(session, user_id, vocab)
+            if analysis.goals_done:
+                user = await session.get(User, user_id, with_for_update=True)
+                if user is not None and user.active_mission:
+                    user.active_mission, new_goals = apply_goals(
+                        user.active_mission, analysis.goals_done
+                    )
             if analysis.topic:
                 await session.execute(
                     update(Message).where(Message.id == message_id).values(topic=analysis.topic)
@@ -220,6 +252,7 @@ class DialogService:
             len(analysis.mistakes),
             len(vocab),
         )
+        return new_goals
 
     # --- голос ---
 
@@ -248,13 +281,14 @@ class DialogService:
         *,
         caption: str | None = None,
         notify_limit: bool = False,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> SpeakStatus:
         """Озвучка ответа: кэш file_id → лимит → ElevenLabs TTS → sendVoice.
 
         С caption голосовое и есть сам ответ (текст в подписи) — его id запоминаем в message.
         """
         if message.tts_file_id:
-            sent = await self._send_voice(bot, chat_id, message.tts_file_id, caption)
+            sent = await self._send_voice(bot, chat_id, message.tts_file_id, caption, reply_markup)
             if caption is not None:
                 message.tg_message_id = sent.message_id
                 await session.commit()
@@ -292,7 +326,7 @@ class DialogService:
         )
         try:
             file = BufferedInputFile(audio, filename="reply.ogg")
-            sent = await self._send_voice(bot, chat_id, file, caption)
+            sent = await self._send_voice(bot, chat_id, file, caption, reply_markup)
             if sent.voice:
                 message.tts_file_id = sent.voice.file_id
             if caption is not None:
@@ -303,15 +337,19 @@ class DialogService:
 
     @staticmethod
     async def _send_voice(
-        bot: Bot, chat_id: int, voice: BufferedInputFile | str, caption: str | None
+        bot: Bot,
+        chat_id: int,
+        voice: BufferedInputFile | str,
+        caption: str | None,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> TgMessage:
         try:
-            return await bot.send_voice(chat_id, voice, caption=caption)
+            return await bot.send_voice(chat_id, voice, caption=caption, reply_markup=reply_markup)
         except TelegramBadRequest as exc:
             # Premium-пользователь запретил голосовые от ботов — отправляем как аудиофайл.
             if "VOICE_MESSAGES_FORBIDDEN" not in str(exc) or isinstance(voice, str):
                 raise
-            return await bot.send_audio(chat_id, voice, caption=caption)
+            return await bot.send_audio(chat_id, voice, caption=caption, reply_markup=reply_markup)
 
     def should_offer_voice(self, user: User) -> bool:
         """После второго нажатия 🔊 за день — один раз предложить озвучивать без кнопки."""

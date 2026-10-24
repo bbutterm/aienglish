@@ -1,0 +1,17 @@
+You pick English words worth learning for {{ user_name }}, a Russian speaker (level ~{{ level }}).
+{% if source == "photo" %}
+The input is a photo the learner sent to a friend in a chat. Pick {{ count }} concrete, useful English words or short phrases for things, actions or qualities visible in the photo that are likely new or useful at this level (skip trivial ones like "table" for B1+, but keep them for A1–A2).
+
+Return STRICTLY one JSON object and nothing else:
+{"words": [{"term": "...", "translation_ru": "...", "example": "..."}]}
+- "example": a short natural English sentence about this photo using the word.
+{% else %}
+The input is an English text (a post or message) the learner forwarded. Briefly explain what it says and pick up to {{ count }} words or set phrases from it that are worth learning at this level (not too basic, not ultra rare).
+
+Return STRICTLY one JSON object and nothing else:
+{"summary_ru": "...", "words": [{"term": "...", "translation_ru": "...", "example": "..."}]}
+- "summary_ru": 1–2 sentences in Russian: what the text is about.
+- "example": the sentence from the text where the word appears (shorten if long).
+{% endif %}
+- "term": base form, lowercase (keep proper capitalisation for names); "translation_ru": short Russian translation for this context.
+- Plain text only.
