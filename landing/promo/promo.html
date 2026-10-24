@@ -1,0 +1,932 @@
+<!doctype html>
+<!--
+  English Buddy — промо-ролик (HTML-анимация с детерминированным таймлайном).
+  Всё состояние кадра — чистая функция времени: window.renderAt(t). Захват кадров — capture.js.
+
+  Параметры адресной строки:
+    ?format=vertical | square   1080×1920 (по умолчанию) или 1080×1080
+    &bot=YOUR_BOT               юзернейм бота для финальной плашки t.me/…
+    &t=10.5                     заморозить кадр на секунде 10.5 (для проверки)
+  Без &t ролик просто проигрывается по кругу (пробел — пауза, ←/→ — перемотка).
+
+  РАСКАДРОВКА (27 с, 30 fps, без звука — всё держат крупные титры)
+  Нить: кнопка микрофона — герой. Страх → нажал → сказал с ошибкой → друг ответил голосом →
+  ошибку зачеркнула красная ручка, правильное — на маркере → эта правка улетает в урок → ещё фичи → CTA.
+
+  1. Хук 0–3.4. Варианты: (а) набранное и стёртое сообщение; (б) огромный заголовок + дрожащий микрофон,
+     ручка зачёркивает «Боишься» ✔; (в) плоская волна молчания; (г) пустой чат с мигающим курсором.
+     Выбрано (б): сразу вводит оба мотива бренда и героя-микрофон. Ручка зачёркивает страх — микрофон
+     успокаивается и «падает» в поле ввода чата (передача объекта, а не склейка).
+  2. Чат 3.4–9.2. Варианты: (а) телефон в руке; (б) парящее окно Telegram в 2.5D с дрейфом камеры ✔;
+     (в) сплит-скрин «ты/Jake»; (г) только пузыри без интерфейса. Выбрано (б): узнаваемо и читаемо.
+     Запись голосового (таймер и волна в поле ввода) → пузырь с расшифровкой → Jake записывает → отвечает голосом.
+  3. Правка 9.2–12.4. Варианты: (а) правка поверх расшифровки; (б) отдельное сообщение Jake «Кстати:» +
+     наезд камеры и глубина резкости ✔; (в) лупа над словом; (г) сплит до/после. Выбрано (б): так работает
+     продукт, и крупный план даёт прочитать зачёркивание и маркер.
+  4. Урок 12.4–17.4. Варианты: (а) склейка на экран Mini App; (б) чип «I agree» перелетает в слот урока,
+     чат уходит в глубину, карточка урока выезжает с поворотом ✔; (в) страницы тетради листаются; (г) чек-лист.
+     Выбрано (б): причинная связь «твоя фраза → твой урок» видна без слов.
+  5. Фичи 17.4–22.0. Варианты: (а) сетка из шести карточек; (б) два быстрых свайпа с размытием ✔;
+     (в) колесо фич; (г) список. Выбрано (б): две фичи успеваешь прочитать, ритм не проседает.
+  6. Финал 22.0–27.0. Варианты: (а) логотип рисуется ручкой + маркер ✔; (б) QR-код; (в) чат с /start;
+     (г) просто текст. Выбрано (а) + плашка t.me/… на маркере; держим 3+ с для чтения.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>English Buddy — промо</title>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #FBF8F1; --paper2: #F4EFE3; --card: #FFFFFF; --ink: #1B1A17; --ink2: #5C5A52; --line: #E8E3D6;
+  --marker: #FFE066; --pen: #E5484D; --fix: #1E8E5A; --sky: #3B6FD8; --plum: #8E4EC6; --out: #FFF4C4; --outline: #EFD98A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #222; }
+body.capture { background: var(--paper); }
+#stage { position: relative; overflow: hidden; background: var(--paper); perspective: 2600px; font-family: Onest, sans-serif; color: var(--ink); }
+body:not(.capture) #stage { transform-origin: 0 0; }
+.layer { position: absolute; inset: 0; }
+#bgFar, #bgMid { position: absolute; left: -60%; top: -40%; width: 220%; height: 180%; transform-origin: 50% 50%; will-change: transform; }
+#bgFar {
+  background-image: linear-gradient(rgba(59, 111, 216, .10) 2px, transparent 2px), linear-gradient(90deg, rgba(59, 111, 216, .10) 2px, transparent 2px);
+  background-size: 56px 56px;
+}
+#bgFar .margin { position: absolute; top: 0; bottom: 0; width: 3px; background: rgba(229, 72, 77, .42); }
+.doodle { position: absolute; overflow: visible; }
+.doodle path, .doodle circle, .doodle ellipse { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+#world { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; transform-origin: 0 0; transform-style: preserve-3d; }
+#world > .obj { position: absolute; transform-origin: 50% 50%; backface-visibility: hidden; }
+
+/* ---------- Telegram-подобный чат ---------- */
+#chat { left: 70px; top: 600px; width: 940px; height: 1040px; background: var(--card); border: 2px solid var(--line); border-radius: 46px; overflow: hidden; }
+#chat .head { position: absolute; left: 0; right: 0; top: 0; height: 132px; display: flex; align-items: center; gap: 22px; padding: 0 34px; border-bottom: 2px solid var(--line); background: var(--card); z-index: 2; }
+.ava { border-radius: 50%; display: grid; place-items: center; color: #fff; font-family: Unbounded; font-weight: 700; flex: none; }
+.ava.j { background: var(--sky); } .ava.e { background: var(--plum); }
+#chat .head .ava { width: 84px; height: 84px; font-size: 36px; }
+#chat .name { font-weight: 600; font-size: 42px; line-height: 1.1; }
+#chat .status { position: relative; height: 38px; font-size: 30px; color: var(--ink2); }
+#chat .status span { position: absolute; left: 0; top: 0; white-space: nowrap; }
+#chat .status .blue { color: var(--sky); }
+#chat .head .dots { margin-left: auto; display: flex; flex-direction: column; gap: 7px; }
+#chat .head .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); }
+#chat .body { position: absolute; left: 0; right: 0; top: 132px; bottom: 128px; background: var(--paper2); overflow: hidden;
+  background-image: radial-gradient(rgba(27, 26, 23, .07) 2.4px, transparent 2.8px); background-size: 34px 34px; }
+#chat .input { position: absolute; left: 0; right: 0; bottom: 0; height: 128px; display: flex; align-items: center; gap: 24px; padding: 0 22px 0 34px; border-top: 2px solid var(--line); background: var(--card); z-index: 2; }
+#chat .input .ph { font-size: 38px; color: var(--ink2); flex: 1; position: relative; height: 50px; }
+#chat .input .ph > * { position: absolute; left: 0; top: 0; white-space: nowrap; }
+#chat .rec { display: flex; align-items: center; gap: 18px; }
+#chat .rec .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--pen); }
+#chat .rec .tm { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 500; }
+#chat .rec .cancel { color: var(--ink2); margin-left: 20px; }
+#chat .mic { position: relative; width: 96px; height: 96px; border-radius: 50%; background: var(--sky); display: grid; place-items: center; flex: none; }
+#chat .mic .ring { position: absolute; inset: 0; border-radius: 50%; background: rgba(59, 111, 216, .18); }
+#chat .mic svg, #bigmic svg { position: relative; width: 46%; height: 46%; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; }
+.clip { width: 50px; height: 50px; fill: none; stroke: var(--ink2); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+.msg { position: absolute; max-width: 740px; padding: 22px 30px 14px; border-radius: 34px; font-size: 38px; line-height: 1.38; background: var(--card); border: 2px solid var(--line); transform-origin: 0 100%; }
+.msg.in { left: 28px; border-bottom-left-radius: 10px; }
+.msg.out { right: 28px; background: var(--out); border-color: var(--outline); border-bottom-right-radius: 10px; transform-origin: 100% 100%; }
+.msg time { display: block; text-align: right; font-size: 26px; color: var(--ink2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.msg time b { color: var(--fix); font-weight: 500; letter-spacing: -6px; margin-left: 8px; }
+.voice { display: flex; align-items: center; gap: 22px; width: 560px; }
+.play { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--sky); }
+.msg.out .play { background: var(--ink); }
+.play svg { width: 34px; height: 34px; fill: #fff; margin-left: 5px; }
+.wavebox { flex: 1; }
+.wave { position: relative; height: 58px; }
+.wave .bars { position: absolute; inset: 0; display: flex; align-items: center; gap: 5px; }
+.wave .bars i { flex: 1; border-radius: 4px; background: rgba(27, 26, 23, .24); }
+.msg.out .wave .bars i { background: rgba(27, 26, 23, .42); }
+.wave .bars.on i { background: var(--sky); }
+.vdur { font-size: 27px; color: var(--ink2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tx { margin-top: 14px; font-size: 36px; line-height: 1.4; }
+.tx .wd { display: inline; }
+.noticed { position: relative; display: inline-block; }
+.noticed svg { position: absolute; left: 0; bottom: -10px; width: 100%; height: 16px; overflow: visible; }
+.noticed path { fill: none; stroke: var(--pen); stroke-width: 3.5; stroke-linecap: round; }
+.fixlbl { font-size: 32px; color: var(--ink2); }
+.fixrow { display: flex; align-items: center; gap: 18px; font-size: 48px; font-weight: 600; margin: 8px 0 6px; white-space: nowrap; }
+.fixrow .arr { color: var(--ink2); font-weight: 400; }
+.rule { font-size: 32px; color: var(--ink2); line-height: 1.35; }
+.rule b { color: var(--ink); font-weight: 600; }
+
+/* зачёркивание ручкой и маркер */
+.struck { position: relative; display: inline-block; color: var(--ink2); }
+.struck svg { position: absolute; left: -3%; top: 30%; width: 104%; height: 46%; overflow: visible; }
+.struck path { fill: none; stroke: var(--pen); stroke-linecap: round; }
+.mkw { position: relative; display: inline-block; z-index: 0; }
+.mkw .mk { position: absolute; z-index: -1; left: -.12em; right: -.12em; top: .1em; bottom: .02em; }
+.mkw .mk svg { width: 100%; height: 100%; display: block; }
+.mkw .mk path { fill: var(--marker); }
+.chipfix { position: relative; display: inline-block; z-index: 0; padding: 0 .22em; }
+.chipfix .mk { position: absolute; z-index: -1; inset: -.02em 0; }
+.chipfix .mk svg { width: 100%; height: 100%; display: block; }
+.chipfix .mk path { fill: var(--marker); }
+
+/* ---------- Карточки ---------- */
+.card { background: var(--card); border: 2px solid var(--line); border-radius: 40px; }
+#lesson { left: 90px; top: 590px; width: 900px; padding: 44px 50px 46px; }
+.lk { font-size: 26px; font-weight: 600; color: var(--ink2); letter-spacing: .06em; text-transform: uppercase; display: flex; justify-content: space-between; align-items: center; }
+.pill { font-size: 25px; letter-spacing: 0; text-transform: none; font-weight: 600; padding: 8px 18px; border-radius: 999px; background: rgba(229, 72, 77, .12); color: var(--pen); }
+.ltitle { font-family: Unbounded; font-weight: 700; font-size: 50px; line-height: 1.15; margin-top: 12px; }
+.phr { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 0; border-top: 2px solid var(--line); }
+.phr:first-of-type { margin-top: 18px; }
+.phr .en { font-weight: 600; font-size: 36px; line-height: 1.25; }
+.phr .ru { color: var(--ink2); font-size: 29px; margin-top: 2px; }
+.phr .say { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; flex: none; }
+.phr .say svg { width: 24px; height: 24px; fill: var(--sky); margin-left: 4px; }
+.sep { height: 0; border-top: 3px dashed var(--line); margin: 26px 0 22px; }
+.err { padding: 18px 0 16px; border-top: 2px solid var(--line); }
+.err:first-of-type { margin-top: 16px; }
+.err .row { display: flex; align-items: center; gap: 18px; font-size: 42px; font-weight: 600; white-space: nowrap; }
+.err .row .arr { color: var(--ink2); font-weight: 400; }
+.err .rule { font-size: 29px; margin-top: 8px; }
+.lbtn { margin-top: 26px; height: 100px; border-radius: 26px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 600; font-size: 34px; }
+
+#pod, #boost { left: 90px; top: 720px; width: 900px; padding: 46px 50px 50px; }
+.ftop { display: flex; align-items: center; gap: 22px; }
+.tagnew { font-weight: 600; font-size: 28px; background: var(--marker); padding: 8px 14px 10px; border-radius: 10px; transform: rotate(-3deg); }
+.duo { display: flex; }
+.duo .ava { width: 104px; height: 104px; font-size: 44px; border: 6px solid var(--card); }
+.duo .ava + .ava { margin-left: -30px; }
+.ftitle { font-family: Unbounded; font-weight: 700; font-size: 46px; line-height: 1.15; }
+.fsub { color: var(--ink2); font-size: 32px; line-height: 1.35; margin-top: 26px; }
+.pwave { margin-top: 36px; display: flex; align-items: center; gap: 24px; }
+.pwave .play { width: 100px; height: 100px; background: var(--ink); }
+.pwave .wave { flex: 1; height: 130px; }
+.pwave .bars i { border-radius: 5px; }
+.pwave .bars.on i { background: var(--ink); }
+.ptime { display: flex; justify-content: space-between; color: var(--ink2); font-size: 27px; margin-top: 10px; padding-left: 124px; font-variant-numeric: tabular-nums; }
+.psub { margin-top: 30px; background: var(--paper2); border-radius: 26px; padding: 26px 30px; font-size: 36px; line-height: 1.35; height: 162px; position: relative; overflow: hidden; }
+.psub p { position: absolute; left: 30px; right: 30px; top: 26px; }
+.psub b { font-weight: 600; }
+.psub .e { color: var(--plum); } .psub .j { color: var(--sky); }
+.bk { color: var(--ink2); font-size: 30px; margin-top: 30px; }
+.bsent { font-size: 50px; font-weight: 600; line-height: 1.3; margin-top: 16px; }
+.bsent2 { font-size: 50px; font-weight: 600; line-height: 1.3; margin-top: 18px; display: flex; gap: 18px; align-items: baseline; }
+.bsent2 .arr { color: var(--ink2); font-weight: 400; }
+.chips { display: flex; gap: 16px; margin-top: 36px; flex-wrap: wrap; }
+.chip { font-size: 34px; font-weight: 500; padding: 14px 26px; border-radius: 999px; background: var(--paper2); }
+.chip.mk { background: var(--marker); }
+
+/* ---------- Экранные слои ---------- */
+#capfade { position: absolute; left: 0; right: 0; top: 0; pointer-events: none; }
+.cap { position: absolute; font-family: Unbounded; font-weight: 700; letter-spacing: -.012em; color: var(--ink); }
+.cap .ln { display: block; overflow: hidden; padding: .04em .2em .2em; margin: -.04em -.2em -.2em; white-space: nowrap; }
+.cap .w { display: inline-block; position: relative; will-change: transform; }
+.cap .sp { display: inline-block; width: .3em; }
+#hookwhy { position: absolute; font-size: 46px; font-weight: 500; color: var(--ink2); white-space: nowrap; }
+#bigmic { position: absolute; border-radius: 50%; background: var(--ink); display: grid; place-items: center; }
+#bigmic .ring { position: absolute; inset: 0; border-radius: 50%; border: 4px solid var(--ink); }
+#bigmic svg { width: 40%; height: 40%; }
+#flychip { position: absolute; left: 0; top: 0; font-weight: 600; white-space: nowrap; transform-origin: 50% 50%; }
+
+#end { position: absolute; left: 0; top: 0; width: 1080px; text-align: center; }
+#end .logo { display: flex; align-items: center; justify-content: center; gap: 30px; }
+#end .logo svg.mark { width: 150px; height: 150px; overflow: visible; }
+#end .word { font-family: Unbounded; font-weight: 700; font-size: 70px; letter-spacing: -.01em; white-space: nowrap; }
+#end .word span { display: inline-block; }
+#end .head2 { font-family: Unbounded; font-weight: 700; line-height: 1.12; margin-top: 90px; }
+#end .head2 .ln { display: block; overflow: hidden; padding: .04em .2em .2em; margin: -.04em -.2em -.2em; white-space: nowrap; }
+#end .head2 .w { display: inline-block; position: relative; }
+#end .cta { display: inline-flex; align-items: center; gap: 26px; margin-top: 70px; height: 140px; padding: 0 56px; border-radius: 40px; background: var(--marker); font-weight: 600; font-size: 54px; }
+#end .cta svg { width: 56px; height: 56px; fill: none; stroke: var(--ink); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+#end .small { color: var(--ink2); font-size: 38px; margin-top: 44px; font-weight: 500; }
+
+/* превью-панель (не попадает в кадр) */
+#bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #111; color: #ddd; font: 13px/1 system-ui; }
+#bar input { flex: 1; }
+body.capture #bar { display: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="layer" id="bgl">
+    <div id="bgFar"><div class="margin" id="marginLine"></div></div>
+    <div id="bgMid"></div>
+  </div>
+
+  <div id="world">
+    <!-- Чат -->
+    <div class="obj" id="chat">
+      <div class="head">
+        <svg viewBox="0 0 24 24" style="width:44px;height:44px;fill:none;stroke:var(--sky);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"><path d="M15 5l-7 7 7 7"/></svg>
+        <span class="ava j">J</span>
+        <div>
+          <div class="name">Jake</div>
+          <div class="status"><span id="stOnline">в сети</span><span id="stRec" class="blue">записывает голосовое…</span><span id="stTyping" class="blue">печатает…</span></div>
+        </div>
+        <span class="dots"><i></i><i></i><i></i></span>
+      </div>
+      <div class="body" id="cbody">
+        <div class="msg in" id="m1">So… did you finally buy that new laptop?<time>21:14</time></div>
+        <div class="msg out" id="m2">
+          <div class="voice"><span class="play"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span>
+            <div class="wavebox"><div class="wave" data-seed="3" data-n="34"></div><div class="vdur">0:06</div></div></div>
+          <p class="tx" id="m2tx"></p>
+          <time>21:15<b>✓✓</b></time>
+        </div>
+        <div class="msg in" id="m3">
+          <div class="voice"><span class="play"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span>
+            <div class="wavebox"><div class="wave" data-seed="7" data-n="34" id="m3wave"></div><div class="vdur" id="m3dur">0:04</div></div></div>
+          <p class="tx">Ha! If your wife agrees, it’s definitely time. Work or gaming?</p>
+          <time>21:15</time>
+        </div>
+        <div class="msg in" id="m4">
+          <p class="fixlbl">Кстати:</p>
+          <p class="fixrow"><span class="struck" id="m4s">I am agree<svg viewBox="0 0 100 20" preserveAspectRatio="none"><path stroke-width="5" vector-effect="non-scaling-stroke" d="M1 13C18 9 40 14 62 10S92 8 99 9"/></svg></span><span class="arr">→</span><span class="chipfix" id="m4fix"><span class="mk"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z"/></svg></span>I agree</span></p>
+          <p class="rule" id="m4rule"><b>agree</b> — уже глагол, am не нужен</p>
+          <time>21:16</time>
+        </div>
+      </div>
+      <div class="input">
+        <svg class="clip" viewBox="0 0 24 24"><path d="m20 11.5-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7"/></svg>
+        <div class="ph">
+          <span id="phText">Сообщение</span>
+          <span class="rec" id="recRow"><i class="dot" id="recDot"></i><span class="tm" id="recTm">0:00</span><span class="cancel">‹ Влево — отмена</span></span>
+        </div>
+        <span class="mic" id="cmic"><span class="ring" id="cring"></span><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></span>
+      </div>
+    </div>
+
+    <!-- Урок -->
+    <div class="obj card" id="lesson">
+      <div class="lk"><span>Урок · из разговора 23 окт</span><span class="pill">2 ошибки</span></div>
+      <div class="ltitle" id="lt1">Тема: компьютеры</div>
+      <div class="phr" data-i="0"><div><div class="en">My laptop keeps freezing.</div><div class="ru">Ноутбук постоянно зависает.</div></div><span class="say"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span></div>
+      <div class="phr" data-i="1"><div><div class="en">It’s worth the money.</div><div class="ru">Он того стоит.</div></div><span class="say"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span></div>
+      <div class="phr" data-i="2"><div><div class="en">I need to back up my files.</div><div class="ru">Надо сделать копию файлов.</div></div><span class="say"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span></div>
+      <div class="sep"></div>
+      <div class="ltitle" id="lt2" style="margin-top:0">Разбор ошибок</div>
+      <div class="err" id="e1">
+        <div class="row"><span class="struck" id="e1s">I am agree<svg viewBox="0 0 100 20" preserveAspectRatio="none"><path stroke-width="4.5" vector-effect="non-scaling-stroke" d="M1 12C18 9 40 13 62 10S92 8 99 9"/></svg></span><span class="arr">→</span><span class="chipfix" id="slot"><span class="mk"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z"/></svg></span>I agree</span></div>
+        <p class="rule" id="e1r"><b>agree</b> — глагол: I agree, she agrees</p>
+      </div>
+      <div class="err" id="e2">
+        <div class="row"><span class="struck" id="e2s">I buyed it<svg viewBox="0 0 100 20" preserveAspectRatio="none"><path stroke-width="4.5" vector-effect="non-scaling-stroke" d="M1 11C20 13 44 9 64 11S90 12 99 10"/></svg></span><span class="arr">→</span><span class="mkw" id="e2f"><span class="mk"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z"/></svg></span>I bought it</span></div>
+        <p class="rule" id="e2r"><b>buy</b> → bought → bought</p>
+      </div>
+      <div class="lbtn" id="lbtn">Потренировать · 6 заданий</div>
+    </div>
+
+    <!-- Подкаст -->
+    <div class="obj card" id="pod">
+      <div class="ftop"><div class="duo"><span class="ava j">J</span><span class="ava e">E</span></div><div class="ftitle">Подкаст<br>про тебя</div><span class="tagnew" style="margin-left:auto">новое</span></div>
+      <p class="fsub">Jake и Emma обсуждают твою неделю: ноутбук, «I agree» и 9 новых слов</p>
+      <div class="pwave"><span class="play"><svg viewBox="0 0 24 24"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.8l11-7.2c.6-.4.6-1.2 0-1.6l-11-7.2C7.9 3.5 7 4 7 4.8Z"/></svg></span><div class="wave" data-seed="11" data-n="46" id="pwave"></div></div>
+      <div class="ptime"><span id="ptNow">0:44</span><span>2:04</span></div>
+      <div class="psub">
+        <p id="ps1"><b class="e">Emma:</b> So he finally agrees with his wife!</p>
+        <p id="ps2"><b class="j">Jake:</b> And no more “I am agree”. Proud of him.</p>
+      </div>
+    </div>
+
+    <!-- Прокачка слов -->
+    <div class="obj card" id="boost">
+      <div class="ftop"><div class="ftitle">Прокачка слов</div><span class="tagnew" style="margin-left:auto">новое</span></div>
+      <p class="bk">Ты сказал <b style="color:var(--ink)">very good</b> 7 раз за неделю</p>
+      <p class="bsent">The new laptop is <span class="struck" id="bs">very good<svg viewBox="0 0 100 20" preserveAspectRatio="none"><path stroke-width="5" vector-effect="non-scaling-stroke" d="M1 12C18 9 40 13 62 10S92 8 99 9"/></svg></span>.</p>
+      <p class="bsent2" id="bs2"><span class="arr">→</span><span>The new laptop is <span class="mkw" id="bmk"><span class="mk"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z"/></svg></span>a beast</span>.</span></p>
+      <div class="chips"><span class="chip" data-c="0">excellent</span><span class="chip" data-c="1">brilliant</span><span class="chip mk" data-c="2">a beast</span></div>
+    </div>
+  </div>
+
+  <div id="capfade"></div>
+  <div class="layer" id="caps"></div>
+  <div id="hookwhy">…а если ошибусь?</div>
+  <div id="bigmic"><span class="ring" id="bigring"></span><svg viewBox="0 0 24 24" style="fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round"><rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></div>
+  <div id="flychip" class="chipfix"><span class="mk"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z" fill="#FFE066"/></svg></span>I agree</div>
+
+  <div id="end">
+    <div class="logo">
+      <svg class="mark" viewBox="0 0 64 64">
+        <path id="lgFill" d="M15 7h34a11 11 0 0 1 11 11v19a11 11 0 0 1-11 11H27l-12.5 9.5V48A11 11 0 0 1 4 37V18A11 11 0 0 1 15 7Z" fill="#fff"/>
+        <path id="lgMark" d="M10.5 29.5 51 23.5 54 35 13.5 41Z" fill="#FFE066" stroke="#FFE066" stroke-width="2.5" stroke-linejoin="round"/>
+        <path id="lgLine" pathLength="1" d="M15 7h34a11 11 0 0 1 11 11v19a11 11 0 0 1-11 11H27l-12.5 9.5V48A11 11 0 0 1 4 37V18A11 11 0 0 1 15 7Z" fill="none" stroke="#1B1A17" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="1"/>
+      </svg>
+      <div class="word" id="lgWord"></div>
+    </div>
+    <div class="head2" id="endHead"></div>
+    <div class="cta" id="endCta"><svg viewBox="0 0 24 24"><path d="M20.5 3.5 3.9 10.1c-.8.3-.7 1.4.1 1.6l6.4 1.8 1.8 6.4c.2.8 1.3.9 1.6.1L20.5 3.5Z"/><path d="m10.4 13.5 4.3-4.3"/></svg><span id="endLink">t.me/YOUR_BOT</span></div>
+    <p class="small" id="endSmall">Без анкет: нажми /start — и болтай</p>
+  </div>
+</div>
+<div id="bar"><button id="pp">⏸</button><input id="scrub" type="range" min="0" max="27" step="0.01" value="0"><span id="tt">0.00</span></div>
+
+<script>
+/* ================= Параметры ================= */
+const Q = new URLSearchParams(location.search);
+const FORMAT = Q.get('format') === 'square' ? 'square' : 'vertical';
+const BOT = (Q.get('bot') || 'YOUR_BOT').replace(/^@/, '').replace(/[^A-Za-z0-9_]/g, '');
+const DUR = 27;
+const W = 1080, H = FORMAT === 'square' ? 1080 : 1920;
+
+// Раскладка по форматам. Мир (чат, карточки) нарисован в координатах 1080×1920;
+// для квадрата он масштабируется вокруг точки (540, 1140).
+const L = FORMAT === 'square' ? {
+  S: 0.72, cx: 540, cy: 706, kCard: 1.0, kFeat: 1.1, featUp: 40,
+  cap: { x: 72, y: 50, w: 936, size: 74, lh: 1.08 },
+  capFadeH: 300,
+  hook: { x: 72, y: 96, w: 936, size: 118, lh: 1.04, perLine: true },
+  why: { y: 975 }, mic: { x: 540, y: 790, d: 190 },
+  end: { y: 150, scale: .82 },
+  doodles: 'square',
+} : {
+  S: 1, cx: 540, cy: 1150, kCard: 1.1, kFeat: 1.12, featUp: 70,
+  cap: { x: 90, y: 214, w: 900, size: 104, lh: 1.1 },
+  capFadeH: 640,
+  hook: { x: 90, y: 400, w: 900, size: 168, lh: 1.04, perLine: true },
+  why: { y: 1470 }, mic: { x: 540, y: 1215, d: 250 },
+  end: { y: 520, scale: 1 },
+  doodles: 'vertical',
+};
+
+/* ================= Утилиты ================= */
+const $ = (s) => document.querySelector(s);
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, p) => a + (b - a) * p;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eOut = (p) => 1 - Math.pow(1 - p, 3);
+const eIn = (p) => p * p * p;
+const eInOut = (p) => (p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const eOutExpo = (p) => (p >= 1 ? 1 : 1 - Math.pow(2, -10 * p));
+const eBack = (p, s = 1.7) => 1 + (s + 1) * Math.pow(p - 1, 3) + s * Math.pow(p - 1, 2);
+// ключевые кадры: [[t, value], ...] с easing между ними
+function keys(t, ks, ease = eInOut) {
+  if (t <= ks[0][0]) return ks[0][1];
+  for (let i = 1; i < ks.length; i++) {
+    if (t <= ks[i][0]) {
+      const p = ease((t - ks[i - 1][0]) / (ks[i][0] - ks[i - 1][0]));
+      const a = ks[i - 1][1], b = ks[i][1];
+      return Array.isArray(a) ? a.map((v, k) => lerp(v, b[k], p)) : lerp(a, b, p);
+    }
+  }
+  return ks[ks.length - 1][1];
+}
+// «рисование» штриха ручкой: открываем SVG слева направо (надёжнее, чем dashoffset с non-scaling-stroke)
+const reveal = (svg, p) => { const x = -8 + p * 116; svg.style.clipPath = `polygon(-8% -200%, ${x}% -200%, ${x}% 300%, -8% 300%)`; };
+// размытие по скорости: быстрые пролёты не «двоятся» между подкадрами
+const VH = 1 / 120;
+const speedOf = (fn, t) => { const a = fn(t - VH), b = fn(t + VH); return Math.hypot(b.x - a.x, b.y - a.y, ((b.z || 0) - (a.z || 0)) * .5) / (2 * VH); };
+const mblur = (v, k = 1) => { const b = Math.min(16, v * .0022 * k); return b > .4 ? `blur(${b.toFixed(1)}px)` : 'none'; };
+const MARKER_PATH = 'M4 7C38 3 92 6 140 3c22-1 40 0 56 2l1 30c-30 3-70 1-110 3-28 1-56 2-84-1z';
+
+/* ================= Сборка DOM ================= */
+const stage = $('#stage');
+stage.style.width = W + 'px'; stage.style.height = H + 'px';
+$('#endLink').textContent = 't.me/' + BOT;
+
+// волны голосовых — детерминированные
+document.querySelectorAll('.wave').forEach((el) => {
+  const seed = +el.dataset.seed, n = +el.dataset.n;
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const v = Math.abs(Math.sin(i * 1.31 + seed) * Math.cos(i * .47 + seed * 1.7));
+    const h = Math.round(16 + 84 * (0.32 + 0.68 * v) * (i < 2 || i > n - 3 ? .55 : 1));
+    s += `<i style="height:${h}%"></i>`;
+  }
+  el.innerHTML = `<div class="bars">${s}</div><div class="bars on">${s}</div>`;
+});
+
+// живая волна в поле ввода при записи
+const recWave = document.createElement('div');
+recWave.style.cssText = 'position:absolute;left:150px;top:-4px;height:58px;display:flex;gap:6px;align-items:center';
+for (let i = 0; i < 34; i++) { const b = document.createElement('i'); b.style.cssText = 'width:7px;border-radius:4px;background:var(--pen);opacity:.75;height:10%'; recWave.appendChild(b); }
+$('#recRow').appendChild(recWave);
+$('#recRow').querySelector('.cancel').remove();
+
+// расшифровка голосового — по словам, с пометкой ошибки
+const TX = ['Not', 'yet!', 'My', 'old', 'one', 'is', 'so', 'slow,', 'and', '§', 'with', 'my', 'wife', '—', 'it’s', 'time.'];
+$('#m2tx').innerHTML = TX.map((w) => w === '§'
+  ? `<span class="wd noticed" id="m2err">I am agree<svg viewBox="0 0 100 16" preserveAspectRatio="none"><path vector-effect="non-scaling-stroke" d="M1 8 Q 5 2 9 8 T 17 8 T 25 8 T 33 8 T 41 8 T 49 8 T 57 8 T 65 8 T 73 8 T 81 8 T 89 8 T 97 8"/></svg></span>`
+  : `<span class="wd">${w}</span>`).join(' ');
+const txWords = [...document.querySelectorAll('#m2tx .wd')];
+
+// титры: строки из слов; [слово, {mark, strike}]
+const caps = [];
+function makeCap(lines, tin, tout, place) {
+  const el = document.createElement('div');
+  el.className = 'cap';
+  const words = [];
+  lines.forEach((line) => {
+    const ln = document.createElement('span'); ln.className = 'ln';
+    line.forEach((item, k) => {
+      const [txt, o = {}] = Array.isArray(item) ? item : [item];
+      if (k) { const sp = document.createElement('span'); sp.className = 'sp'; ln.appendChild(sp); }
+      const w = document.createElement('span'); w.className = 'w';
+      if (o.mark) w.innerHTML = `<span class="mkb" style="position:absolute;z-index:-1;left:-.1em;right:-.1em;top:.42em;bottom:-.02em"><svg viewBox="0 0 200 40" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><path d="${MARKER_PATH}" fill="#FFE066"/></svg></span>`;
+      w.appendChild(document.createTextNode(txt));
+      if (o.strike) w.insertAdjacentHTML('beforeend', `<svg class="stk" viewBox="0 0 100 20" preserveAspectRatio="none" style="position:absolute;left:-4%;top:34%;width:108%;height:40%;overflow:visible"><path d="M1 13C18 8 40 15 62 10S90 7 99 8" fill="none" stroke="#E5484D" stroke-width="12" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`);
+      w.style.zIndex = 0;
+      ln.appendChild(w);
+      words.push({ el: w, o, mk: w.querySelector('.mkb'), stk: w.querySelector('.stk path') });
+    });
+    el.appendChild(ln);
+  });
+  $('#caps').appendChild(el);
+  const P = place === 'hook' ? L.hook : L.cap;
+  el.style.left = P.x + 'px'; el.style.top = P.y + 'px'; el.style.lineHeight = P.lh;
+  // подгонка размера: все строки одного кегля, самая длинная влезает в ширину
+  el.style.fontSize = P.size + 'px';
+  const widest = Math.max(...[...el.querySelectorAll('.ln')].map((l) => { l.style.display = 'inline-block'; const w = l.getBoundingClientRect().width; l.style.display = ''; return w; }));
+  const fs = Math.min(P.size, P.size * (P.w + 0.4 * P.size) / widest);
+  el.style.fontSize = fs.toFixed(1) + 'px';
+  const cap = { el, words, tin, tout, place, fs };
+  caps.push(cap);
+  return cap;
+}
+
+/* ================= Титры и сцены ================= */
+const T = {
+  hookIn: 0.1, strike: [2.0, 2.35], hookMark: [2.4, 2.8], hookOut: 2.9,
+  chatIn: [3.02, 3.6],
+  m1: 3.7, rec: [4.1, 5.45], m2: 5.5, tx: [5.75, 6.75], stRec: [6.75, 7.35], m3: 7.35, m3play: [7.6, 9.1],
+  noticed: [8.85, 9.25], stTyping: [9.2, 9.6], m4: 9.6, m4strike: [10.05, 10.45], m4mark: [10.5, 10.95], m4rule: 11.0,
+  push: [9.35, 10.6], lift: [12.0, 12.3], fly: [12.3, 13.65],
+  chatOut: [12.3, 13.3], lessonIn: [12.45, 13.45],
+  lesson: { e1s: [13.25, 13.6], e1r: 13.9, ph: [12.95, 13.15, 13.35], e2: 14.4, e2s: [14.65, 15.0], e2f: [15.05, 15.45], btn: 15.6 },
+  whip1: [17.35, 17.85], pod: { play: [17.8, 19.8], s2: 18.75 },
+  whip2: [19.75, 20.25], boost: { s: [20.45, 20.85], b2: 20.9, mk: [21.05, 21.45], chips: [21.25, 21.45, 21.65] },
+  boostOut: [21.95, 22.4],
+  end: { line: [22.15, 22.85], mark: [22.7, 23.0], word: [22.85, 23.5], head: 23.35, cta: 24.05, small: 24.45 },
+};
+
+const C = {
+  hook: makeCap([[['Боишься', { strike: true }]], [['говорить', { mark: true }]], ['по-английски?']], T.hookIn, T.hookOut, 'hook'),
+  a: makeCap([['Болтай'], [['голосом', { mark: true }]]], 3.72, 6.85),
+  b: makeCap([['Jake', 'ответит'], ['тоже', ['голосом', { mark: true }]]], 7.05, 8.95),
+  c: makeCap([['Ошибся?'], [['Друг', { at: 10.3 }], ['поправит', { mark: true, at: 10.38 }]]], 9.2, 12.15),
+  d: makeCap([['Урок', 'из', ['твоего', { mark: true }]], [['же', { mark: true }], 'разговора']], 12.75, 17.3),
+  e: makeCap([['Подкаст'], [['про', { mark: true }], ['тебя', { mark: true }]]], 17.65, 19.7),
+  f: makeCap([['Прокачка'], [['слов', { mark: true }]]], 20.05, 21.9),
+};
+
+// финальная плашка
+const endWord = $('#lgWord');
+'English Buddy'.split('').forEach((ch) => { const s = document.createElement('span'); s.textContent = ch === ' ' ? ' ' : ch; endWord.appendChild(s); });
+const endHead = $('#endHead');
+endHead.innerHTML = '';
+const endWords = [];
+[['Попробуй'], ['бесплатно'], ['в Telegram']].forEach((line, li) => {
+  const ln = document.createElement('span'); ln.className = 'ln';
+  line.forEach((w, k) => {
+    if (k) ln.appendChild(Object.assign(document.createElement('span'), { className: 'sp', innerHTML: '&nbsp;' }));
+    const s = document.createElement('span'); s.className = 'w';
+    if (w === 'бесплатно') s.innerHTML = `<span class="mkb" style="position:absolute;z-index:-1;left:-.1em;right:-.1em;top:.42em;bottom:-.02em"><svg viewBox="0 0 200 40" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><path d="${MARKER_PATH}" fill="#FFE066"/></svg></span>`;
+    s.appendChild(document.createTextNode(w)); s.style.zIndex = 0;
+    ln.appendChild(s); endWords.push({ el: s, mk: s.querySelector('.mkb') });
+  });
+  endHead.appendChild(ln);
+});
+
+// фоновые каракули (параллакс)
+const DOODLES = L.doodles === 'vertical' ? [
+  { x: 860, y: 140, s: 1.2, html: '<ellipse cx="60" cy="40" rx="58" ry="34" stroke="#E5484D" stroke-width="5" opacity=".28" transform="rotate(-8 60 40)"/>', w: 140, h: 90, f: .55 },
+  { x: 70, y: 1760, s: 1, html: '<path d="M5 30 C 40 5, 70 55, 105 28 S 170 5, 205 30" stroke="#1B1A17" stroke-width="5" opacity=".12"/>', w: 210, h: 60, f: .5 },
+  { x: 840, y: 1700, s: 1, html: '<path d="M10 40 L 34 64 L 90 8" stroke="#1E8E5A" stroke-width="7" opacity=".22"/>', w: 100, h: 72, f: .65 },
+  { x: 40, y: 560, s: 1, html: '<path d="M10 90 C 40 30, 80 20, 120 26 M 100 10 L 122 26 L 104 46" stroke="#1B1A17" stroke-width="5" opacity=".10"/>', w: 130, h: 100, f: .45 },
+  { x: 900, y: 980, s: 1, html: '<text x="0" y="120" font-family="Unbounded" font-weight="700" font-size="150" fill="none" stroke="#1B1A17" stroke-width="2.5" opacity=".08">Aa</text>', w: 260, h: 140, f: .35 },
+] : [
+  { x: 900, y: 40, s: 1, html: '<ellipse cx="60" cy="40" rx="58" ry="34" stroke="#E5484D" stroke-width="5" opacity=".28" transform="rotate(-8 60 40)"/>', w: 140, h: 90, f: .55 },
+  { x: 40, y: 960, s: 1, html: '<path d="M5 30 C 40 5, 70 55, 105 28 S 170 5, 205 30" stroke="#1B1A17" stroke-width="5" opacity=".12"/>', w: 210, h: 60, f: .5 },
+  { x: 900, y: 930, s: 1, html: '<path d="M10 40 L 34 64 L 90 8" stroke="#1E8E5A" stroke-width="7" opacity=".22"/>', w: 100, h: 72, f: .65 },
+  { x: 30, y: 420, s: 1, html: '<text x="0" y="120" font-family="Unbounded" font-weight="700" font-size="150" fill="none" stroke="#1B1A17" stroke-width="2.5" opacity=".08">Aa</text>', w: 260, h: 140, f: .35 },
+];
+const dEls = DOODLES.map((d) => {
+  const el = document.createElement('div'); el.className = 'doodle';
+  el.innerHTML = `<svg width="${d.w}" height="${d.h}" viewBox="0 0 ${d.w} ${d.h}" style="overflow:visible">${d.html}</svg>`;
+  $('#stage').insertBefore(el, $('#world'));
+  return { el, d };
+});
+
+// красная линия полей тетради — в дальнем плане, левее титров
+$('#marginLine').style.left = (W * .6 + 54) + 'px';
+
+// подложка под титрами, чтобы они читались поверх приближенного чата
+$('#capfade').style.height = L.capFadeH + 'px';
+$('#capfade').style.background = `linear-gradient(rgba(251,248,241,1) 0%, rgba(251,248,241,.96) ${Math.round(L.capFadeH * .62)}px, rgba(251,248,241,0) 100%)`;
+
+/* ================= Раскладка сообщений ================= */
+const MSG = ['#m1', '#m2', '#m3', '#m4'].map((s) => $(s));
+const MSG_T = [T.m1, T.m2, T.m3, T.m4];
+const GAP = 22, PADT = 26, PADB = 26;
+let msgH = [], bodyH = 0;
+function measure() {
+  bodyH = $('#cbody').clientHeight;
+  msgH = MSG.map((m) => m.offsetHeight);
+}
+
+/* ================= Камера ================= */
+// фокус (fx, fy) в координатах мира, зум k, наклоны rx/ry/rz (градусы)
+let M4C = [540, 1400]; // центр сообщения-правки в мире (уточняется в init)
+let CARD_Y = { lesson: 1140, pod: 1100, boost: 1050 }; // центры карточек (уточняются в init)
+function camera(t) {
+  let fx = 540, fy = 1140, k = 1, rx = 0, ry = 0, rz = 0;
+  // базовая траектория по сценам
+  const base = keys(t, [
+    [0, [540, 1120, 1.0, 0, -2, 0]],
+    [3.5, [540, 1140, 1.0, 2, -4, 0]],
+    [6.5, [540, 1160, 1.03, 1, 3, 0]],
+    [9.3, [540, 1170, 1.05, 0, 4, 0]],
+    [10.7, [M4C[0], M4C[1], 1.36, 3, -3, -0.6]],
+    [12.25, [M4C[0], M4C[1] - 10, 1.44, 2, -5, -0.8]],
+    [13.4, [540, CARD_Y.lesson, L.kCard, 3, 5, 0]],
+    [17.3, [540, CARD_Y.lesson - 10, L.kCard * 1.03, 1, -4, 0]],
+    [17.85, [540, CARD_Y.pod + L.featUp, L.kFeat, 0, 3, 0]],
+    [19.75, [540, CARD_Y.pod + L.featUp - 10, L.kFeat * 1.03, 0, 4, 0]],
+    [20.25, [540, CARD_Y.boost + L.featUp, L.kFeat, 0, -3, 0]],
+    [22.0, [540, CARD_Y.boost + L.featUp - 10, L.kFeat * 1.04, 1, -3, 0]],
+    [27, [540, CARD_Y.boost + L.featUp, 1.0, 0, 0, 0]],
+  ]);
+  [fx, fy, k, rx, ry, rz] = base;
+  // постоянный мягкий дрейф (камера «дышит»), затухает на финале
+  const drift = 1 - prog(t, 25.5, 27) * .6;
+  fx += 9 * Math.sin(t * .55) * drift; fy += 11 * Math.sin(t * .41 + 1.2) * drift;
+  ry += 1.1 * Math.sin(t * .62 + .4) * drift; rx += .8 * Math.sin(t * .47 + 2.1) * drift;
+  // толчок камеры на свайпах
+  const w1 = prog(t, T.whip1[0], T.whip1[1]), w2 = prog(t, T.whip2[0], T.whip2[1]);
+  rz += Math.sin(w1 * Math.PI) * 1.4 + Math.sin(w2 * Math.PI) * -1.4;
+  k *= 1 - .03 * Math.sin(w1 * Math.PI) - .03 * Math.sin(w2 * Math.PI);
+  return { fx, fy, k, rx, ry, rz };
+}
+
+/* ================= Рендер кадра ================= */
+let FLY = null; // геометрия перелёта чипа (из init)
+let MICTO = null; // куда «падает» большой микрофон
+const set = (el, st) => { for (const k in st) el.style[k] = st[k]; };
+
+// траектории крупных объектов (для движения и для размытия по скорости)
+function chatPos(t) {
+  const ci = eOut(prog(t, T.chatIn[0], T.chatIn[1]));
+  const coE = eInOut(prog(t, T.chatOut[0], T.chatOut[1]));
+  return { x: -coE * 760, y: (1 - ci) * 1100, z: -coE * 900, rx: (1 - ci) * 28, ry: -coE * 38 };
+}
+function lessonPos(t) {
+  const li = eOut(prog(t, T.lessonIn[0], T.lessonIn[1]));
+  const w1 = eIn(prog(t, T.whip1[0], T.whip1[0] + .38));
+  return { x: (1 - li) * 900 - w1 * 1500, y: (1 - li) * 60, z: -(1 - li) * 500, ry: (1 - li) * 42 - w1 * 30 };
+}
+function podPos(t) {
+  const pin = eOut(prog(t, T.whip1[0] + .12, T.whip1[1]));
+  const w2 = eIn(prog(t, T.whip2[0], T.whip2[0] + .38));
+  return { x: (1 - pin) * 1500 - w2 * 1500, y: 0, z: 0, ry: (1 - pin) * 32 - w2 * 30 };
+}
+function boostPos(t) {
+  const bin = eOut(prog(t, T.whip2[0] + .12, T.whip2[1]));
+  const bo = eInOut(prog(t, T.boostOut[0], T.boostOut[1]));
+  return { x: (1 - bin) * 1500, y: bo * 240, z: -bo * 900, ry: (1 - bin) * 32, rx: bo * 24 };
+}
+function flyPos(t) {
+  if (!FLY) return { x: 0, y: 0 };
+  const lift = eOut(prog(t, T.lift[0], T.lift[1]));
+  const fp = eInOut(prog(t, T.fly[0], T.fly[1]));
+  const ax = FLY.a.x, ay = FLY.a.y - lift * 26;
+  return { x: lerp(ax, FLY.b.x, fp), y: lerp(ay, FLY.b.y, fp) - Math.sin(fp * Math.PI) * 260, fp, lift };
+}
+
+function renderAt(t) {
+  const cam = camera(t);
+  const S = L.S;
+  // мир
+  set($('#world'), { transform: `translate(${L.cx}px, ${L.cy}px) rotateX(${cam.rx}deg) rotateY(${cam.ry}deg) rotateZ(${cam.rz}deg) scale(${cam.k * S}) translate(${-cam.fx}px, ${-cam.fy}px)` });
+  // фон: дальний (сетка) и средний (каракули) планы с разным параллаксом
+  const par = (f) => `translate(${(-(cam.fx - 540) * f * S - cam.ry * 9 * f)}px, ${(-(cam.fy - 1140) * f * S + cam.rx * 9 * f)}px) rotate(${cam.rz * f}deg) scale(${1 + (cam.k - 1) * f})`;
+  $('#bgFar').style.transform = par(.28);
+  dEls.forEach(({ el, d }) => {
+    const f = d.f;
+    const dx = -(cam.fx - 540) * f * S - cam.ry * 14 * f, dy = -(cam.fy - 1140) * f * S + cam.rx * 14 * f;
+    const sc = 1 + (cam.k - 1) * f;
+    el.style.transform = `translate(${d.x + dx + (d.x - W / 2) * (sc - 1)}px, ${d.y + dy + (d.y - H / 2) * (sc - 1)}px) rotate(${cam.rz * f}deg) scale(${sc})`;
+    el.style.opacity = 1 - prog(t, 21.9, 22.4) * .6;
+  });
+
+  /* ---------- 1. Хук ---------- */
+  const hook = C.hook;
+  const hookOut = prog(t, T.hookOut, T.hookOut + .45);
+  hook.words.forEach((w, i) => {
+    const t0 = T.hookIn + i * .2;
+    const p = prog(t, t0, t0 + .42);
+    const e = eOut(p);
+    const sc = lerp(1.55, 1, e), bl = (1 - e) * 14;
+    const out = eIn(clamp(hookOut * 1.25 - i * .12));
+    set(w.el, {
+      transform: `translateY(${-out * 140}%) scale(${sc}) rotate(${(1 - e) * (i % 2 ? 3 : -3)}deg)`,
+      opacity: (p > 0 ? clamp(p * 2.5) : 0) * (1 - out),
+      filter: bl > .3 ? `blur(${bl.toFixed(1)}px)` : 'none',
+      transformOrigin: '0% 60%',
+    });
+    if (w.stk) reveal(w.stk.parentNode, eInOut(prog(t, T.strike[0], T.strike[1])));
+    if (w.mk) w.mk.style.clipPath = `inset(0 ${(1 - eInOut(prog(t, T.hookMark[0], T.hookMark[1]))) * 100}% 0 0)`;
+    if (w.o.strike) w.el.style.color = `rgba(27,26,23,${1 - .45 * prog(t, T.strike[0], T.strike[1])})`;
+  });
+  hook.el.style.display = t < T.hookOut + .7 ? '' : 'none';
+
+  // «…а если ошибусь?»
+  const why = $('#hookwhy');
+  const wIn = eOut(prog(t, 1.05, 1.45)), wOut = prog(t, 2.3, 2.6);
+  const shake = (1 - prog(t, 2.1, 2.5)) * prog(t, .6, 1);
+  set(why, {
+    top: L.why.y + 'px', left: '50%',
+    transform: `translateX(-50%) translateY(${(1 - wIn) * 30 + Math.sin(t * 53) * 2 * shake}px)`,
+    opacity: wIn * (1 - wOut),
+  });
+
+  // большой микрофон: дрожит, пока страшно; успокаивается после зачёркивания; падает в поле ввода
+  const mic = $('#bigmic');
+  const micIn = eBack(prog(t, .35, .8), 2.2);
+  const A = shake;
+  const jx = A * (5 * Math.sin(t * 47) + 3 * Math.sin(t * 83 + 1)), jy = A * (4 * Math.sin(t * 59 + 2) + 2 * Math.sin(t * 97));
+  const jr = A * 5 * Math.sin(t * 61);
+  let mx = L.mic.x + jx, my = L.mic.y + jy, md = L.mic.d * micIn;
+  const fall = prog(t, T.hookOut, T.chatIn[1] - .05);
+  if (MICTO && fall > 0) {
+    const e = eInOut(fall);
+    mx = lerp(L.mic.x, MICTO.x, e); my = lerp(L.mic.y, MICTO.y, e) - Math.sin(e * Math.PI) * 120; md = lerp(L.mic.d, MICTO.d, e);
+  }
+  const calmRing = prog(t, 2.45, 2.9);
+  set(mic, {
+    left: (mx - md / 2) + 'px', top: (my - md / 2) + 'px', width: md + 'px', height: md + 'px',
+    transform: `rotate(${jr}deg)`,
+    background: fall > .5 ? `rgb(${lerp(27, 59, (fall - .5) * 2)},${lerp(26, 111, (fall - .5) * 2)},${lerp(23, 216, (fall - .5) * 2)})` : '#1B1A17',
+    display: t < T.chatIn[1] ? '' : 'none',
+    filter: fall > 0 && fall < 1 ? mblur(Math.hypot(MICTO.x - L.mic.x, MICTO.y - L.mic.y) / (T.chatIn[1] - T.hookOut) * 1.5 * Math.sin(fall * Math.PI), .5) : 'none',
+  });
+  set($('#bigring'), { transform: `scale(${1 + calmRing * .35})`, opacity: (calmRing > 0 && calmRing < 1 ? (1 - calmRing) : 0) });
+
+  /* ---------- 2–3. Чат ---------- */
+  const chat = $('#chat');
+  const cp = chatPos(t);
+  set(chat, {
+    transform: `translate3d(${cp.x}px, ${cp.y}px, ${cp.z}px) rotateX(${cp.rx}deg) rotateY(${cp.ry}deg)`,
+    opacity: (t < T.chatIn[0] ? 0 : clamp(prog(t, T.chatIn[0], T.chatIn[0] + .18))) * (1 - prog(t, 12.9, 13.3)),
+    display: t > 13.35 ? 'none' : '',
+    filter: mblur(speedOf(chatPos, t)),
+  });
+  // статус
+  const inR = (a) => t >= a[0] && t < a[1];
+  $('#stRec').style.opacity = inR(T.stRec) ? 1 : 0;
+  $('#stTyping').style.opacity = inR(T.stTyping) ? 1 : 0;
+  $('#stOnline').style.opacity = inR(T.stRec) || inR(T.stTyping) ? 0 : 1;
+  // запись голосового
+  const recOn = t >= T.rec[0] && t < T.rec[1];
+  const rp = prog(t, T.rec[0], T.rec[1]);
+  $('#phText').style.opacity = recOn ? 0 : 1;
+  $('#recRow').style.opacity = recOn ? 1 : 0;
+  $('#recDot').style.opacity = .35 + .65 * (Math.sin(t * 9) * .5 + .5);
+  $('#recTm').textContent = '0:0' + Math.min(6, Math.floor(1 + rp * 6));
+  [...recWave.children].forEach((b, i) => {
+    const vis = rp * 34 > i;
+    b.style.height = vis ? (20 + 70 * Math.abs(Math.sin(i * 1.7 + 3) * Math.sin(i * .6 + t * 3))) + '%' : '10%';
+    b.style.opacity = vis ? .8 : .18;
+  });
+  const press = recOn ? 1 : 0;
+  const pressE = eOut(prog(t, T.rec[0], T.rec[0] + .2)) * (1 - eOut(prog(t, T.rec[1], T.rec[1] + .2)));
+  set($('#cmic'), { transform: `scale(${1 + .32 * pressE})`, opacity: t < T.chatIn[1] - .05 ? 0 : 1 });
+  set($('#cring'), { transform: `scale(${1 + pressE * (.35 + .12 * Math.sin(t * 7))})`, opacity: pressE });
+
+  // сообщения: появление и прокрутка вверх
+  let acc = PADT;
+  const a = MSG_T.map((t0) => prog(t, t0, t0 + .42));
+  const growth = a.map((v) => eOut(v));
+  const contentH = PADT + msgH.reduce((s, h, i) => s + (h + GAP) * growth[i], 0) - GAP * (growth[3] > 0 ? 1 : 0) + PADB;
+  const scroll = Math.max(0, contentH - bodyH);
+  MSG.forEach((m, i) => {
+    const top = acc - scroll;
+    acc += (msgH[i] + GAP) * growth[i];
+    const p = a[i];
+    const sc = p <= 0 ? .85 : lerp(.85, 1, eBack(p, 1.9));
+    set(m, { top: top + 'px', opacity: clamp(p * 3), transform: `translateY(${(1 - eOut(p)) * 40}px) scale(${sc})` });
+  });
+  // расшифровка по словам
+  txWords.forEach((w, i) => { w.style.opacity = clamp((t - T.tx[0] - i * (T.tx[1] - T.tx[0]) / txWords.length) / .18); });
+  reveal($('#m2err svg'), eOut(prog(t, T.noticed[0], T.noticed[1])));
+  // ответ Jake голосом: проигрывание
+  const pl = prog(t, T.m3play[0], T.m3play[1]);
+  $('#m3wave .bars.on').style.clipPath = `inset(0 ${(1 - pl) * 100}% 0 0)`;
+  $('#m3dur').textContent = pl > 0 && pl < 1 ? '0:0' + Math.floor(pl * 4) : '0:04';
+  // правка: ручка и маркер
+  reveal($('#m4s svg'), eInOut(prog(t, T.m4strike[0], T.m4strike[1])));
+  $('#m4s').style.color = `rgba(92,90,82,${1 - .2 * prog(t, T.m4strike[0], T.m4strike[1])})`;
+  const m4mk = eInOut(prog(t, T.m4mark[0], T.m4mark[1]));
+  $('#m4fix .mk').style.clipPath = `inset(0 ${(1 - m4mk) * 100}% 0 0)`;
+  $('#m4fix').style.opacity = t < T.fly[0] ? clamp(prog(t, T.m4mark[0] - .1, T.m4mark[0] + .15)) : 0;
+  $('#m4rule').style.opacity = eOut(prog(t, T.m4rule, T.m4rule + .35));
+  // глубина резкости: при наезде на правку остальное уходит в расфокус
+  const dof = eInOut(prog(t, T.push[0], T.push[1])) * (1 - prog(t, 12.2, 12.6));
+  const blur = (v) => (v > .15 ? `blur(${v.toFixed(2)}px)` : 'none');
+  ['#m1', '#m2', '#m3'].forEach((s) => { $(s).style.filter = blur(dof * 5.5); });
+  chat.querySelector('.head').style.filter = blur(dof * 7);
+  chat.querySelector('.input').style.filter = blur(dof * 7);
+  chat.querySelector('.body').style.backgroundSize = '34px 34px';
+
+  /* ---------- 4. Урок ---------- */
+  const lesson = $('#lesson');
+  const lp = lessonPos(t);
+  set(lesson, {
+    transform: `translate3d(${lp.x}px, ${lp.y}px, ${lp.z}px) rotateY(${lp.ry}deg)`,
+    opacity: (t < T.lessonIn[0] ? 0 : clamp(prog(t, T.lessonIn[0], T.lessonIn[0] + .25))) * (1 - prog(t, T.whip1[0] + .2, T.whip1[0] + .4)),
+    display: t < T.lessonIn[0] || t > T.whip1[0] + .45 ? 'none' : '',
+    filter: mblur(speedOf(lessonPos, t)),
+  });
+  const LS = T.lesson;
+  lesson.querySelectorAll('.phr').forEach((el, i) => {
+    const p = eOut(prog(t, LS.ph[i], LS.ph[i] + .4));
+    set(el, { opacity: p, transform: `translateX(${(1 - p) * 60}px)` });
+  });
+  reveal($('#e1s svg'), eInOut(prog(t, LS.e1s[0], LS.e1s[1])));
+  const land = prog(t, T.fly[1], T.fly[1] + .3);
+  $('#slot').style.opacity = t >= T.fly[1] ? 1 : 0;
+  $('#slot').style.transform = `scale(${1 + .18 * Math.sin(land * Math.PI) * (1 - land)}, ${1 - .16 * Math.sin(land * Math.PI) * (1 - land * .5)})`;
+  const r1 = eOut(prog(t, LS.e1r, LS.e1r + .4));
+  set($('#e1r'), { opacity: r1, transform: `translateY(${(1 - r1) * 16}px)` });
+  const e2 = eOut(prog(t, LS.e2, LS.e2 + .4));
+  set($('#e2'), { opacity: e2, transform: `translateY(${(1 - e2) * 24}px)` });
+  reveal($('#e2s svg'), eInOut(prog(t, LS.e2s[0], LS.e2s[1])));
+  $('#e2f .mk').style.clipPath = `inset(0 ${(1 - eInOut(prog(t, LS.e2f[0], LS.e2f[1]))) * 100}% 0 0)`;
+  $('#e2f').style.opacity = clamp(prog(t, LS.e2f[0] - .1, LS.e2f[0] + .1));
+  const bt = eBack(prog(t, LS.btn, LS.btn + .45));
+  set($('#lbtn'), { opacity: clamp(prog(t, LS.btn, LS.btn + .2)), transform: `scale(${lerp(.9, 1, bt)})` });
+
+  // перелёт чипа «I agree» из чата в урок
+  const fc = $('#flychip');
+  if (FLY && t >= T.lift[0] && t < T.fly[1]) {
+    const { x: cx, y: cy, fp, lift } = flyPos(t);
+    const sc = lerp(FLY.a.h, FLY.b.h, fp) / FLY.base * (1 + .12 * lift * (1 - fp));
+    set(fc, { display: '', transform: `translate(${cx - FLY.w / 2}px, ${cy - FLY.hh / 2}px) scale(${sc}) rotate(${Math.sin(fp * Math.PI) * -7}deg)`, filter: mblur(speedOf(flyPos, t), .6) });
+  } else fc.style.display = 'none';
+
+  /* ---------- 5. Подкаст и прокачка ---------- */
+  const pod = $('#pod');
+  const pq = podPos(t);
+  set(pod, {
+    transform: `translate3d(${pq.x}px, 0, 0) rotateY(${pq.ry}deg)`,
+    opacity: clamp(prog(t, T.whip1[0] + .12, T.whip1[0] + .3)) * (1 - prog(t, T.whip2[0] + .2, T.whip2[0] + .4)),
+    display: t < T.whip1[0] + .1 || t > T.whip2[0] + .45 ? 'none' : '',
+    filter: mblur(speedOf(podPos, t)),
+  });
+  const pp = prog(t, T.pod.play[0], T.pod.play[1]);
+  const pPos = .3 + pp * .22;
+  $('#pwave .bars.on').style.clipPath = `inset(0 ${(1 - pPos) * 100}% 0 0)`;
+  const secs = Math.floor(44 + pp * 26);
+  $('#ptNow').textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const s2 = eOut(prog(t, T.pod.s2, T.pod.s2 + .35));
+  set($('#ps1'), { transform: `translateY(${-s2 * 120}%)`, opacity: 1 - s2 });
+  set($('#ps2'), { transform: `translateY(${(1 - s2) * 120}%)`, opacity: s2 });
+
+  const boost = $('#boost');
+  const bq = boostPos(t);
+  set(boost, {
+    transform: `translate3d(${bq.x}px, ${bq.y}px, ${bq.z}px) rotateY(${bq.ry}deg) rotateX(${bq.rx}deg)`,
+    opacity: clamp(prog(t, T.whip2[0] + .12, T.whip2[0] + .3)) * (1 - prog(t, T.boostOut[0] + .1, T.boostOut[1])),
+    display: t < T.whip2[0] + .1 || t > T.boostOut[1] ? 'none' : '',
+    filter: mblur(speedOf(boostPos, t)),
+  });
+  reveal($('#bs svg'), eInOut(prog(t, T.boost.s[0], T.boost.s[1])));
+  const b2 = eOut(prog(t, T.boost.b2, T.boost.b2 + .4));
+  set($('#bs2'), { opacity: b2, transform: `translateY(${(1 - b2) * 30}px)` });
+  $('#bmk .mk').style.clipPath = `inset(0 ${(1 - eInOut(prog(t, T.boost.mk[0], T.boost.mk[1]))) * 100}% 0 0)`;
+  boost.querySelectorAll('.chip').forEach((c, i) => {
+    const p = prog(t, T.boost.chips[i], T.boost.chips[i] + .4);
+    set(c, { opacity: clamp(p * 3), transform: `scale(${p <= 0 ? .6 : lerp(.6, 1, eBack(p, 2.4))})` });
+  });
+
+  /* ---------- Титры ---------- */
+  caps.forEach((c) => {
+    if (c.place === 'hook') return;
+    const vis = t > c.tin - .05 && t < c.tout + .6;
+    c.el.style.display = vis ? '' : 'none';
+    if (!vis) return;
+    c.words.forEach((w, i) => {
+      const t0 = w.o.at ?? c.tin + i * .08;
+      const p = prog(t, t0, t0 + .5);
+      const q = prog(t, c.tout + i * .035, c.tout + i * .035 + .32);
+      const y = (1 - eOut(p)) * 108 - eIn(q) * 108;
+      set(w.el, { transform: `translateY(${y}%) rotate(${(1 - eOut(p)) * 5}deg)`, opacity: p > 0 && q < 1 ? 1 : 0 });
+      if (w.mk) {
+        const mp = eInOut(prog(t, t0 + .35, t0 + .8));
+        w.mk.style.clipPath = `inset(0 ${(1 - mp) * 100}% 0 0)`;
+      }
+    });
+  });
+  $('#capfade').style.opacity = clamp(prog(t, 3.4, 3.8)) * (1 - prog(t, 21.9, 22.3));
+
+  /* ---------- 6. Финал ---------- */
+  const end = $('#end');
+  const E = T.end;
+  const endOn = t >= E.line[0] - .05;
+  end.style.display = endOn ? '' : 'none';
+  if (endOn) {
+    const drift = (t - 23) * .006;
+    set(end, { transform: `translateY(${L.end.y}px) scale(${L.end.scale * (1 + Math.max(0, drift))})`, transformOrigin: `540px 300px` });
+    $('#lgLine').style.strokeDashoffset = 1 - eInOut(prog(t, E.line[0], E.line[1]));
+    $('#lgFill').style.opacity = eOut(prog(t, E.line[0] + .3, E.line[1]));
+    const mk = eInOut(prog(t, E.mark[0], E.mark[1]));
+    $('#lgMark').style.clipPath = `inset(0 ${(1 - mk) * 100}% 0 0)`;
+    const lgPop = eBack(prog(t, E.line[0], E.line[0] + .5), 2);
+    $('#end svg.mark').style.transform = `scale(${lerp(.7, 1, lgPop)}) rotate(${(1 - lgPop) * -12}deg)`;
+    [...endWord.children].forEach((s, i) => {
+      const p = prog(t, E.word[0] + i * .035, E.word[0] + i * .035 + .35);
+      set(s, { opacity: clamp(p * 2), transform: `translateY(${(1 - eOut(p)) * 60}%)` });
+    });
+    endWords.forEach((w, i) => {
+      const p = prog(t, E.head + i * .1, E.head + i * .1 + .5);
+      set(w.el, { transform: `translateY(${(1 - eOut(p)) * 108}%)` });
+      if (w.mk) w.mk.style.clipPath = `inset(0 ${(1 - eInOut(prog(t, E.head + .45, E.head + .9))) * 100}% 0 0)`;
+    });
+    const cta = eBack(prog(t, E.cta, E.cta + .5), 2);
+    set($('#endCta'), { opacity: clamp(prog(t, E.cta, E.cta + .15)), transform: `scale(${lerp(.6, 1, cta)})` });
+    const sm = eOut(prog(t, E.small, E.small + .45));
+    set($('#endSmall'), { opacity: sm, transform: `translateY(${(1 - sm) * 20}px)` });
+  }
+}
+
+/* ================= Инициализация ================= */
+async function init() {
+  const samples = 'Болтай English Ёё — «»…→ 0123';
+  await Promise.all(['400', '500', '600', '700'].map((w) => document.fonts.load(`${w} 40px Onest`, samples)).concat(
+    ['600', '700'].map((w) => document.fonts.load(`${w} 40px Unbounded`, samples))));
+  await document.fonts.ready;
+  // подгонка титров после загрузки шрифтов
+  caps.forEach((c) => {
+    const P = c.place === 'hook' ? L.hook : L.cap;
+    c.el.style.fontSize = P.size + 'px';
+    if (P.perLine) {
+      c.el.querySelectorAll('.ln').forEach((l) => {
+        l.style.display = 'inline-block'; const w = l.getBoundingClientRect().width; l.style.display = '';
+        l.style.fontSize = Math.min(P.size, P.size * P.w / w).toFixed(1) + 'px';
+      });
+      return;
+    }
+    const widest = Math.max(...[...c.el.querySelectorAll('.ln')].map((l) => { l.style.display = 'inline-block'; const w = l.getBoundingClientRect().width; l.style.display = ''; return w; }));
+    c.el.style.fontSize = Math.min(P.size, P.size * P.w / widest).toFixed(1) + 'px';
+  });
+  // финальный заголовок
+  endHead.style.fontSize = (FORMAT === 'square' ? 96 : 116) + 'px';
+  measure();
+  const ctr = (id) => { const e = $(id); return e.offsetTop + e.offsetHeight / 2; };
+  CARD_Y = { lesson: ctr('#lesson'), pod: ctr('#pod'), boost: ctr('#boost') };
+  // центр сообщения-правки в координатах мира (без камеры)
+  renderAt(10.8);
+  const r = $('#m4').getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const k10 = camera(10.8);
+  // переводим экран → мир через обратное преобразование текущей камеры (поворотами пренебрегаем)
+  const sx = (r.left + r.width / 2 - sr.left), sy = (r.top + r.height / 2 - sr.top);
+  M4C = [k10.fx + (sx - L.cx) / (k10.k * L.S), k10.fy + (sy - L.cy) / (k10.k * L.S)];
+  // ещё раз — камера теперь смотрит в найденную точку
+  renderAt(10.8);
+  // перелёт чипа: откуда и куда
+  renderAt(T.lift[1]);
+  const ra = $('#m4fix').getBoundingClientRect();
+  renderAt(T.fly[1] + .001);
+  const rb = $('#slot').getBoundingClientRect();
+  const fc = $('#flychip');
+  fc.style.display = ''; fc.style.transform = 'none';
+  fc.style.fontSize = '48px';
+  const rf = fc.getBoundingClientRect();
+  FLY = {
+    a: { x: ra.left + ra.width / 2 - sr.left, y: ra.top + ra.height / 2 - sr.top, h: ra.height },
+    b: { x: rb.left + rb.width / 2 - sr.left, y: rb.top + rb.height / 2 - sr.top, h: rb.height },
+    w: rf.width, hh: rf.height, base: rf.height,
+  };
+  // куда падает большой микрофон
+  renderAt(T.chatIn[1] + .01);
+  const rm = $('#cmic').getBoundingClientRect();
+  MICTO = { x: rm.left + rm.width / 2 - sr.left, y: rm.top + rm.height / 2 - sr.top, d: rm.width };
+  renderAt(0);
+  window.__ready = true;
+}
+
+window.renderAt = renderAt;
+window.DUR = DUR;
+window.__init = init();
+
+/* ================= Превью ================= */
+if (Q.has('capture')) {
+  document.body.classList.add('capture');
+} else {
+  const fit = () => { const s = Math.min(innerWidth / W, (innerHeight - 40) / H); stage.style.transform = `scale(${s})`; };
+  addEventListener('resize', fit); fit();
+  window.__init.then(() => {
+    const fixed = Q.get('t');
+    if (fixed !== null) { renderAt(+fixed); return; }
+    let t0 = performance.now(), paused = false, cur = 0;
+    const sc = $('#scrub'), tt = $('#tt');
+    $('#pp').onclick = () => { paused = !paused; $('#pp').textContent = paused ? '▶' : '⏸'; t0 = performance.now() - cur * 1000; };
+    sc.oninput = () => { cur = +sc.value; t0 = performance.now() - cur * 1000; renderAt(cur); };
+    addEventListener('keydown', (e) => {
+      if (e.code === 'Space') $('#pp').click();
+      if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') { cur = clamp(cur + (e.code === 'ArrowRight' ? 1 : -1), 0, DUR); t0 = performance.now() - cur * 1000; renderAt(cur); }
+    });
+    const loop = (now) => {
+      if (!paused) { cur = ((now - t0) / 1000) % DUR; renderAt(cur); sc.value = cur; tt.textContent = cur.toFixed(2); }
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  });
+}
+</script>
+</body>
+</html>
