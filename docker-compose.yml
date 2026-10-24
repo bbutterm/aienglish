@@ -1,0 +1,48 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bot:bot@db:5432/bot
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: bot
+      POSTGRES_DB: bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Ежедневный pg_dump в ./backups, храним 14 дней.
+  backup:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: bot
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          pg_dump -h db -U bot bot | gzip > /backups/bot-$$(date +%Y%m%d-%H%M).sql.gz
+          find /backups -name 'bot-*.sql.gz' -mtime +14 -delete
+          sleep 86400
+        done
+    restart: unless-stopped
+
+volumes:
+  pgdata:
