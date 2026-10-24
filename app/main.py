@@ -25,14 +25,12 @@ from app.services.tts import TextToSpeech
 logger = logging.getLogger(__name__)
 
 BOT_COMMANDS = [
-    BotCommand(command="mode", description="Режим исправлений"),
-    BotCommand(command="voice", description="Озвучка и голос"),
+    BotCommand(command="settings", description="Озвучка, собеседник, уровень"),
     BotCommand(command="mistakes", description="Последние ошибки"),
     BotCommand(command="review", description="Разбор ошибок"),
     BotCommand(command="reset", description="Новая тема"),
     BotCommand(command="app", description="Уроки и прогресс"),
     BotCommand(command="help", description="Как это работает"),
-    BotCommand(command="start", description="Настроить заново"),
 ]
 
 

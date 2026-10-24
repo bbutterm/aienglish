@@ -1,17 +1,15 @@
-from aiogram import Bot, F, Router
+from aiogram import Bot, Router
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
 from aiogram.types import Message as TgMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.handlers.common import send_opener
-from app.bot.keyboards import modes_kb, voice_kb, webapp_kb
-from app.bot.onboarding import start_onboarding
+from app.bot.keyboards import webapp_kb
+from app.bot.onboarding import welcome
 from app.config import Settings
 from app.db import repo
 from app.db.models import User
-from app.personas import get_persona
 from app.services.dialog import DialogService
 from app.services.plans import is_premium, limits_for
 from app.services.review import build_review, format_mistakes
@@ -20,19 +18,6 @@ from app.services.usage import collect_stats, format_stats
 router = Router(name="commands")
 
 MISTAKES_LIMIT = 10
-
-
-def mode_menu_text(user: User, settings: Settings) -> str:
-    return texts.MODE_MENU.format(
-        every=settings.review_every, current=texts.MODES.get(user.mode, user.mode)
-    )
-
-
-def voice_menu_text(user: User) -> str:
-    persona = get_persona(user.persona)
-    return texts.VOICE_MENU.format(
-        always="вкл" if user.voice_always else "выкл", flag=persona.flag, name=persona.name
-    )
 
 
 @router.message(Command("help"))
@@ -44,16 +29,6 @@ async def cmd_help(message: TgMessage, user: User, settings: Settings) -> None:
     if is_premium(user):
         text += "\n" + texts.PREMIUM_ACTIVE.format(until=f"{user.premium_until:%d.%m.%Y}")
     await message.answer(text)
-
-
-@router.message(Command("mode"))
-async def cmd_mode(message: TgMessage, user: User, settings: Settings) -> None:
-    await message.answer(mode_menu_text(user, settings), reply_markup=modes_kb(user.mode))
-
-
-@router.message(Command("voice"))
-async def cmd_voice(message: TgMessage, user: User) -> None:
-    await message.answer(voice_menu_text(user), reply_markup=voice_kb(user))
 
 
 @router.message(Command("mistakes"))
@@ -74,7 +49,6 @@ async def cmd_review(message: TgMessage, session: AsyncSession, user: User) -> N
 @router.message(Command("reset"))
 async def cmd_reset(
     message: TgMessage,
-    state: FSMContext,
     session: AsyncSession,
     user: User,
     dialog: DialogService,
@@ -82,8 +56,7 @@ async def cmd_reset(
     bot: Bot,
 ) -> None:
     if not user.onboarded:
-        await start_onboarding(message, state, user)
-        return
+        await welcome(message, session, user, settings)
     await dialog.memory.reset(session, user)
     await message.answer(texts.RESET_DONE)
     # Новая тема — это LLM-вызов, поэтому уважаем дневной лимит.
@@ -123,8 +96,3 @@ async def cmd_stats(message: TgMessage, session: AsyncSession, settings: Setting
         await message.answer(texts.ADMIN_ONLY)
         return
     await message.answer(format_stats(await collect_stats(session)))
-
-
-@router.message(F.text.startswith("/"))
-async def unknown_command(message: TgMessage) -> None:
-    await message.answer(texts.UNKNOWN_COMMAND)

@@ -30,6 +30,7 @@ const KIND_LABELS = {
 };
 
 const MODES = { chat: "просто болтаем", correct: "с исправлениями", review: "разбор потом" };
+const VOICE_MODES = { auto: "голосом на голосовые", always: "все ответы голосом", off: "по кнопке" };
 
 function confirmAction(text) {
   return new Promise((resolve) => {
@@ -268,6 +269,7 @@ function drawUser(view, ctx, user) {
         h("dt", {}, "ID"), h("dd", {}, String(user.id)),
         h("dt", {}, "Уровень"), h("dd", {}, user.estimated_level ? `${user.level} → ≈ ${user.estimated_level}` : user.level),
         h("dt", {}, "Режим"), h("dd", {}, MODES[user.mode] || user.mode),
+        h("dt", {}, "Озвучка"), h("dd", {}, VOICE_MODES[user.voice_mode] || user.voice_mode),
         h("dt", {}, "Собеседник"), h("dd", {}, user.persona === "uk_casual" ? "Emma 🇬🇧" : "Jake 🇺🇸"),
         h("dt", {}, "С нами с"), h("dd", {}, formatDate(user.created_at, true)),
         h("dt", {}, "Был в сети"), h("dd", {}, relativeTime(user.last_active_at)),

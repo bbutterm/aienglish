@@ -7,7 +7,7 @@ from aiogram.types import TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot import texts
-from app.bot.onboarding import start_onboarding
+from app.bot.onboarding import welcome
 from app.db import repo
 from app.services.plans import limits_for
 
@@ -43,15 +43,14 @@ class UserMiddleware(BaseMiddleware):
 
 
 class DialogGateMiddleware(BaseMiddleware):
-    """Для диалоговых хэндлеров: онбординг пройден и дневной лимит реплик не исчерпан."""
+    """Для диалоговых хэндлеров: знакомство (без анкеты) и дневной лимит реплик."""
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         assert isinstance(event, TgMessage)
         user = data["user"]
         if not user.onboarded:
-            await event.answer(texts.NEED_ONBOARDING)
-            await start_onboarding(event, data["state"], user)
-            return None
+            # Написал, не нажимая /start: здороваемся и сразу отвечаем, ничего не спрашивая.
+            await welcome(event, data["session"], user, data["settings"])
         if await data["dialog"].messages_left(data["session"], user) <= 0:
             limit = limits_for(user, data["settings"]).messages
             await event.answer(texts.LIMIT_REACHED.format(limit=limit))

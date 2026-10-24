@@ -1,5 +1,4 @@
 import logging
-from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.types import Message as TgMessage
@@ -45,6 +44,5 @@ async def on_voice(
         await message.reply(texts.STT_FAILED)
         return
 
-    if settings.show_transcript:
-        await message.reply(texts.TRANSCRIPT.format(text=escape(text)))
+    # Транскрипт не отдельным сообщением, а цитатой в ответе (см. deliver_reply).
     await respond(message, bot, session, user, dialog, kind="voice", text=text)

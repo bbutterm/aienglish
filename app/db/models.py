@@ -45,7 +45,8 @@ class User(Base):
     level: Mapped[str] = mapped_column(default="B1", server_default="B1")
     estimated_level: Mapped[str | None]  # последняя оценка аналитика
     mode: Mapped[str] = mapped_column(default="chat", server_default="chat")
-    voice_always: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Озвучка ответов: auto — голосом на голосовые, always — всегда, off — только по кнопке 🔊
+    voice_mode: Mapped[str] = mapped_column(default="auto", server_default="auto")
     persona: Mapped[str] = mapped_column(default="us_casual", server_default="us_casual")
     timezone: Mapped[str] = mapped_column(default="Europe/Moscow", server_default="Europe/Moscow")
     ping_time: Mapped[time | None]

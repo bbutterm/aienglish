@@ -11,7 +11,6 @@ class Persona:
     origin: str
     bio: str
     voice_setting: str  # имя поля в Settings с voice_id
-    label_ru: str
 
     def voice_id(self, settings: Settings) -> str:
         return getattr(settings, self.voice_setting)
@@ -28,7 +27,6 @@ PERSONAS: dict[str, Persona] = {
             "loves hiking, tacos and terrible puns"
         ),
         voice_setting="voice_us_casual",
-        label_ru="Джейк из Техаса — расслабленный американский английский",
     ),
     "uk_casual": Persona(
         key="uk_casual",
@@ -40,7 +38,6 @@ PERSONAS: dict[str, Persona] = {
             "always planning her next cheap weekend trip"
         ),
         voice_setting="voice_uk_casual",
-        label_ru="Эмма из Манчестера — британский английский",
     ),
 }
 

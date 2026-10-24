@@ -243,7 +243,7 @@ async def user_detail(
         "estimated_level": user.estimated_level,
         "mode": user.mode,
         "persona": user.persona,
-        "voice_always": user.voice_always,
+        "voice_mode": user.voice_mode,
         "limits": {"messages": limits.messages, "tts": limits.tts, "lessons": limits.lessons},
         "progress": await build_progress(session, user, now),
         "cost_by_kind": cost_by_kind,

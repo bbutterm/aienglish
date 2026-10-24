@@ -15,7 +15,7 @@ def make_user(**overrides) -> User:
         level="A2",
         mode="chat",
         persona="uk_casual",
-        voice_always=False,
+        voice_mode="auto",
         context_start_id=0,
     )
     fields.update(overrides)
