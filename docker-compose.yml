@@ -1,12 +1,54 @@
 services:
-  bot:
+  # Одноразово применяет миграции; бот и Mini App стартуют после него.
+  migrate:
     build: .
+    command: ["alembic", "upgrade", "head"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://bot:bot@db:5432/bot
     depends_on:
       db:
         condition: service_healthy
+    restart: "no"
+
+  bot:
+    build: .
+    command: ["python", "-m", "app.main"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bot:bot@db:5432/bot
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Mini App: API и фронтенд уроков, прогресса и админки.
+  web:
+    build: .
+    command: ["python", "-m", "app.web"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bot:bot@db:5432/bot
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11-alpine
+    environment:
+      # Пока домен не задан, Caddy просто слушает :80 и не падает (Mini App при этом выключен).
+      WEBAPP_DOMAIN: ${WEBAPP_DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
     restart: unless-stopped
 
   db:
@@ -46,3 +88,5 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

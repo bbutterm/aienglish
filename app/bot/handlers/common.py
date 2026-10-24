@@ -15,7 +15,8 @@ from app.bot.keyboards import tts_kb
 from app.db import repo
 from app.db.models import Message, User
 from app.llm.openrouter import LLMError
-from app.services.dialog import DialogService, SpeakStatus
+from app.services.companion import OpenerReason
+from app.services.dialog import DialogService, SpeakStatus, wants_voice
 from app.services.review import build_review
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 ANALYST_WAIT_SECONDS = 20
 FALLBACK_OPENER = "Hey! So, how's your day going?"
 MAX_REPLY_CHARS = 3500  # с запасом под HTML-экранирование до лимита Telegram в 4096
+CAPTION_LIMIT = 1024  # лимит подписи к голосовому
+MAX_QUOTE = 400
+MIN_QUOTE = 60
 
 
 def format_reply_html(text: str) -> str:
@@ -48,25 +52,60 @@ async def edit_callback_text(
         logger.debug("Message edit failed", exc_info=True)
 
 
+async def drop_keyboard(callback: CallbackQuery) -> None:
+    if not isinstance(callback.message, TgMessage):
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        logger.debug("Keyboard removal failed", exc_info=True)
+
+
+def transcript_quote(transcript: str, limit: int) -> str:
+    """Что пользователь сказал голосом — цитатой над ответом."""
+    text = transcript if len(transcript) <= limit else transcript[: limit - 1].rstrip() + "…"
+    return f"<blockquote>🗣 {escape(text)}</blockquote>\n"
+
+
+def voice_caption(reply_text: str, transcript: str | None) -> str | None:
+    """Подпись к голосовому ответу; None — ответ не влезает в подпись, нужен обычный текст."""
+    if len(reply_text) > CAPTION_LIMIT - 24:
+        return None
+    body = format_reply_html(reply_text)
+    room = CAPTION_LIMIT - len(reply_text) - 8
+    if not transcript or room < MIN_QUOTE:
+        return body
+    return transcript_quote(transcript, min(room, MAX_QUOTE)) + body
+
+
 async def deliver_reply(
-    bot: Bot, chat_id: int, session: AsyncSession, user: User, dialog: DialogService, reply: Message
+    bot: Bot,
+    chat_id: int,
+    session: AsyncSession,
+    user: User,
+    dialog: DialogService,
+    reply: Message,
+    *,
+    voice: bool = False,
+    transcript: str | None = None,
 ) -> None:
-    markup = None if user.voice_always else tts_kb(reply.id)
-    text = format_reply_html((reply.text or "")[:MAX_REPLY_CHARS])
-    sent = await bot.send_message(chat_id, text, reply_markup=markup)
+    """Один ответ — одно сообщение: голосовое с текстом в подписи или текст с кнопкой 🔊."""
+    reply_text = (reply.text or "")[:MAX_REPLY_CHARS]
+    if voice:
+        caption = voice_caption(reply_text, transcript)
+        if caption is not None:
+            status = await dialog.speak(
+                bot, chat_id, session, user, reply, caption=caption, notify_limit=True
+            )
+            if status is SpeakStatus.SENT:
+                return
+    # Текстом: если голос не нужен, исчерпан лимит озвучки или TTS не ответил.
+    text = format_reply_html(reply_text)
+    if transcript:
+        text = transcript_quote(transcript, MAX_QUOTE) + text
+    sent = await bot.send_message(chat_id, text, reply_markup=tts_kb(reply.id))
     reply.tg_message_id = sent.message_id
     await session.commit()
-    if not user.voice_always:
-        return
-    status = await dialog.speak(bot, chat_id, session, user, reply, notify_limit=True)
-    if status is SpeakStatus.FAILED:
-        # Автоозвучка не вышла — даём кнопку, чтобы попробовать ещё раз.
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=sent.message_id, reply_markup=tts_kb(reply.id)
-            )
-        except TelegramBadRequest:
-            logger.warning("Could not attach TTS button to message %s", sent.message_id)
 
 
 async def respond(
@@ -96,7 +135,17 @@ async def respond(
         await message.answer(texts.LLM_FAILED)
         return
 
-    await deliver_reply(bot, chat_id, session, user, dialog, turn.reply)
+    transcript = text if kind == "voice" and dialog.settings.show_transcript else None
+    await deliver_reply(
+        bot,
+        chat_id,
+        session,
+        user,
+        dialog,
+        turn.reply,
+        voice=wants_voice(user, kind),
+        transcript=transcript,
+    )
 
     if await dialog.review_due(session, user):
         if turn.analysis is not None:
@@ -112,14 +161,15 @@ async def send_opener(
     session: AsyncSession,
     user: User,
     dialog: DialogService,
-    reason: Literal["onboarding", "reset"],
+    reason: OpenerReason,
+    topic: str | None = None,
 ) -> None:
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=chat_id):
-            reply = await dialog.opener(session, user, reason)
+            reply = await dialog.opener(session, user, reason, topic)
     except LLMError:
         logger.exception("Opener failed for user %s", user.id)
         reply = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=FALLBACK_OPENER
         )
-    await deliver_reply(bot, chat_id, session, user, dialog, reply)
+    await deliver_reply(bot, chat_id, session, user, dialog, reply, voice=wants_voice(user, None))

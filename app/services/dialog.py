@@ -19,8 +19,9 @@ from app.db import repo
 from app.db.models import Message, User
 from app.personas import get_persona
 from app.services.analyst import Analyst
-from app.services.companion import Companion
+from app.services.companion import Companion, OpenerReason
 from app.services.memory import Memory
+from app.services.plans import limits_for
 from app.services.stt import SpeechToText
 from app.services.tts import TextToSpeech, TTSError, prepare_tts_text
 from app.services.usage import record_llm, record_usage, stt_cost, tts_cost
@@ -51,6 +52,16 @@ class BackgroundTasks:
     async def drain(self, timeout: float = 30) -> None:
         if self._tasks:
             await asyncio.wait(set(self._tasks), timeout=timeout)
+
+
+VOICE_OFFER_AFTER_TAPS = 2
+
+
+def wants_voice(user: User, input_kind: str | None) -> bool:
+    """Отвечать ли голосом: always — всегда, auto — на голосовые, off — только по кнопке."""
+    if user.voice_mode == "always":
+        return True
+    return user.voice_mode == "auto" and input_kind == "voice"
 
 
 class SpeakStatus(enum.Enum):
@@ -89,13 +100,15 @@ class DialogService:
         self.tts = tts
         self.tasks = tasks
         self._tts_limit_notified: set[tuple[int, date]] = set()
+        self._tts_taps: dict[tuple[int, date], int] = {}
+        self._voice_offered: set[int] = set()
 
     # --- лимиты ---
 
     async def messages_left(self, session: AsyncSession, user: User) -> int:
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_user_messages_since(session, user.id, since)
-        return self.settings.daily_msg_limit - used
+        return limits_for(user, self.settings).messages - used
 
     # --- диалог ---
 
@@ -149,10 +162,14 @@ class DialogService:
         return Turn(reply=assistant, analysis=analysis)
 
     async def opener(
-        self, session: AsyncSession, user: User, reason: Literal["onboarding", "reset"]
+        self,
+        session: AsyncSession,
+        user: User,
+        reason: OpenerReason,
+        topic: str | None = None,
     ) -> Message:
         summary, history = await self.memory.context(session, user)
-        reply = await self.companion.opener(user, history, summary, reason=reason)
+        reply = await self.companion.opener(user, history, summary, reason=reason, topic=topic)
         message = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=reply.text
         )
@@ -225,16 +242,23 @@ class DialogService:
         user: User,
         message: Message,
         *,
+        caption: str | None = None,
         notify_limit: bool = False,
     ) -> SpeakStatus:
-        """Озвучка ответа: кэш file_id → лимит → ElevenLabs TTS → sendVoice."""
+        """Озвучка ответа: кэш file_id → лимит → ElevenLabs TTS → sendVoice.
+
+        С caption голосовое и есть сам ответ (текст в подписи) — его id запоминаем в message.
+        """
         if message.tts_file_id:
-            await bot.send_voice(chat_id, message.tts_file_id)
+            sent = await self._send_voice(bot, chat_id, message.tts_file_id, caption)
+            if caption is not None:
+                message.tg_message_id = sent.message_id
+                await session.commit()
             return SpeakStatus.SENT
 
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_usage_since(session, user.id, "tts", since)
-        if used >= self.settings.daily_tts_limit:
+        if used >= limits_for(user, self.settings).tts:
             if notify_limit:
                 key = (user.id, since.date())
                 if key not in self._tts_limit_notified:
@@ -263,23 +287,40 @@ class DialogService:
             cost_usd=tts_cost(len(text), self.settings),
         )
         try:
-            sent = await self._send_voice(bot, chat_id, audio)
+            file = BufferedInputFile(audio, filename="reply.ogg")
+            sent = await self._send_voice(bot, chat_id, file, caption)
             if sent.voice:
                 message.tts_file_id = sent.voice.file_id
+            if caption is not None:
+                message.tg_message_id = sent.message_id
         finally:
             await session.commit()
         return SpeakStatus.SENT
 
     @staticmethod
-    async def _send_voice(bot: Bot, chat_id: int, audio: bytes) -> TgMessage:
-        file = BufferedInputFile(audio, filename="reply.ogg")
+    async def _send_voice(
+        bot: Bot, chat_id: int, voice: BufferedInputFile | str, caption: str | None
+    ) -> TgMessage:
         try:
-            return await bot.send_voice(chat_id, file)
+            return await bot.send_voice(chat_id, voice, caption=caption)
         except TelegramBadRequest as exc:
             # Premium-пользователь запретил голосовые от ботов — отправляем как аудиофайл.
-            if "VOICE_MESSAGES_FORBIDDEN" not in str(exc):
+            if "VOICE_MESSAGES_FORBIDDEN" not in str(exc) or isinstance(voice, str):
                 raise
-            return await bot.send_audio(chat_id, file)
+            return await bot.send_audio(chat_id, voice, caption=caption)
+
+    def should_offer_voice(self, user: User) -> bool:
+        """После второго нажатия 🔊 за день — один раз предложить озвучивать без кнопки."""
+        if user.voice_mode == "always" or user.id in self._voice_offered:
+            return False
+        today = repo.day_start_utc(user.timezone).date()
+        key = (user.id, today)
+        self._tts_taps = {k: v for k, v in self._tts_taps.items() if k[1] == today}
+        self._tts_taps[key] = self._tts_taps.get(key, 0) + 1
+        if self._tts_taps[key] < VOICE_OFFER_AFTER_TAPS:
+            return False
+        self._voice_offered.add(user.id)
+        return True
 
     # --- режим review ---
 

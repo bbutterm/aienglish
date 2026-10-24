@@ -5,7 +5,7 @@ from aiogram.enums import ChatType
 from aiogram.types import ErrorEvent
 
 from app.bot import texts
-from app.bot.handlers import callbacks, commands, fallback, photo, start, text, voice
+from app.bot.handlers import callbacks, commands, fallback, photo, settings, start, text, voice
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 def build_router() -> Router:
     root = Router(name="root")
     root.message.filter(F.chat.type == ChatType.PRIVATE)
-    # Порядок важен: онбординг (FSM) → команды → кнопки → диалог → всё остальное.
+    # Порядок важен: старт → команды → настройки и кнопки → диалог → всё остальное.
     root.include_routers(
         start.router,
         commands.router,
+        settings.router,
         callbacks.router,
         text.router,
         voice.router,

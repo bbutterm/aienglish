@@ -83,13 +83,20 @@ class TextToSpeech:
         self._settings = settings
 
     async def synthesize(self, text: str, voice_id: str) -> bytes:
+        """Озвучка для голосового сообщения Telegram (OGG/Opus)."""
+        return await ensure_ogg_opus(await self.synthesize_raw(text, voice_id))
+
+    async def synthesize_raw(
+        self, text: str, voice_id: str, output_format: str | None = None
+    ) -> bytes:
+        """Аудио в формате ElevenLabs как есть (по умолчанию — TTS_OUTPUT_FORMAT)."""
         if not voice_id:
             raise TTSError("voice_id is not configured")
         url = f"{self._settings.elevenlabs_base_url.rstrip('/')}/v1/text-to-speech/{voice_id}"
         try:
             response = await self._http.post(
                 url,
-                params={"output_format": self._settings.tts_output_format},
+                params={"output_format": output_format or self._settings.tts_output_format},
                 json={"text": text, "model_id": self._settings.tts_model},
                 headers={"xi-api-key": self._settings.elevenlabs_api_key},
                 timeout=60,
@@ -98,4 +105,4 @@ class TextToSpeech:
             raise TTSError(f"transport error: {exc!r}") from exc
         if response.status_code != 200:
             raise TTSError(f"HTTP {response.status_code}: {response.text[:300]}")
-        return await ensure_ogg_opus(response.content)
+        return response.content

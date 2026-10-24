@@ -47,7 +47,14 @@ OPENER_NOTES = {
         "Start a fresh topic, different from the earlier ones, with one short fun question. "
         "Don't mention this note.]"
     ),
+    "lesson": (
+        "[Chat note, not written by the user: {name} just finished a short English lesson in the "
+        'app; its topic was "{topic}". Bring this topic up naturally, the way a friend would, '
+        "with one short question. Don't call it a lesson and don't mention this note.]"
+    ),
 }
+
+OpenerReason = Literal["onboarding", "reset", "lesson"]
 
 _PHOTO_TAG_RE = re.compile(r"^\s*\[photo:\s*(?P<desc>[^\]\n]*)\]\s*", re.IGNORECASE)
 
@@ -158,9 +165,10 @@ class Companion:
         history: Sequence[Message],
         summary: str | None,
         *,
-        reason: Literal["onboarding", "reset"],
+        reason: OpenerReason,
+        topic: str | None = None,
     ) -> CompanionReply:
-        note = OPENER_NOTES[reason].format(name=user.name)
+        note = OPENER_NOTES[reason].format(name=user.name, topic=topic or "everyday life")
         messages = self.build_messages(user, history, summary, note=note)
         return await self._complete(messages, expect_photo=False)
 

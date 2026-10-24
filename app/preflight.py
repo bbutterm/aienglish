@@ -93,6 +93,7 @@ class Preflight:
             ("OpenRouter: запросы", self.llm_requests),
             ("ElevenLabs", self.speech),
         ]
+        steps.append(("Mini App", self.webapp))
         if include_database:
             steps.append(("База данных", self.database))
         checks: list[Check] = []
@@ -170,6 +171,7 @@ class Preflight:
             ("fallback собеседника", s.companion_fallback_model, True),
             ("аналитик", s.analyst_model, False),
             ("саммари", s.summary_model, False),
+            ("уроки", s.lesson_model, False),
         ]
         checks = []
         for role, model_id, needs_vision in roles:
@@ -249,6 +251,21 @@ class Preflight:
             return checks
         checks.append(Check("Распознавание речи", bool(transcript), f"«{transcript}»"))
         return checks
+
+    async def webapp(self) -> list[Check]:
+        url = self.settings.webapp_url
+        if not url:
+            return [
+                Check(
+                    "Mini App",
+                    True,
+                    "WEBAPP_DOMAIN не задан — уроки, прогресс и админка будут выключены",
+                    warning=True,
+                )
+            ]
+        if not url.startswith("https://"):
+            return [Check("Mini App", False, f"{url}: Telegram открывает Mini App только по https")]
+        return [Check("Mini App", True, f"{url} (HTTPS проверяется после запуска)")]
 
     async def database(self) -> list[Check]:
         engine = create_engine(self.settings.database_url)

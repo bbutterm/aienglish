@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -51,6 +51,23 @@ class Settings(BaseSettings):
     show_transcript: bool = True
     log_level: str = "INFO"
 
+    # Премиум: лимиты вместо дневных выше, пока users.premium_until в будущем
+    premium_daily_msg_limit: int = 200
+    premium_daily_tts_limit: int = 100
+
+    # Mini App
+    webapp_domain: str = ""  # домен Mini App; Caddy выпускает для него HTTPS
+    webapp_url: str = ""  # по умолчанию https://<webapp_domain>; пусто — Mini App выключен
+    web_host: str = "0.0.0.0"
+    web_port: int = 8000
+    init_data_ttl_hours: int = 24
+    lesson_model: str = "google/gemini-3.8-flash"
+    lesson_reasoning_effort: str = "low"
+    daily_lesson_limit: int = 1
+    premium_daily_lesson_limit: int = 3
+    # Аудирование в уроках играет браузер Telegram: mp3 поддерживается везде, в отличие от Ogg/Opus
+    lesson_audio_format: str = "mp3_44100_64"
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def _split_admin_ids(cls, value: object) -> object:
@@ -59,6 +76,12 @@ class Settings(BaseSettings):
         if isinstance(value, int):
             return [value]
         return value
+
+    @model_validator(mode="after")
+    def _derive_webapp_url(self) -> "Settings":
+        if not self.webapp_url and self.webapp_domain:
+            self.webapp_url = f"https://{self.webapp_domain}"
+        return self
 
 
 @lru_cache

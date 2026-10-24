@@ -22,4 +22,5 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
+EXPOSE 8000
 CMD ["sh", "-c", "alembic upgrade head && python -m app.main"]
