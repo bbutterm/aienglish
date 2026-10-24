@@ -1,5 +1,7 @@
-// Вкладка «Урок»: урок по последним разговорам — тема, разбор ошибок и грамматика, слова, итог.
+// Вкладка «Сегодня»: слово друга, урок по последним разговорам, темы для тебя, подкаст.
+// Плеер урока: тема → разбор ошибок и грамматика → слова → итог.
 import { api } from "../api.js";
+import { icon } from "../icons.js";
 import {
   button,
   card,
@@ -14,6 +16,7 @@ import {
   spinner,
   toast,
 } from "../ui.js";
+import { ideaCard } from "./topics.js";
 
 const GENERATION_HINTS = [
   "Перечитываю ваш разговор…",
@@ -23,7 +26,18 @@ const GENERATION_HINTS = [
   "Почти готово…",
 ];
 
-const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : text);
+export const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : text);
+
+/** Реплика собеседника: аватар с инициалом и пузырь. */
+export function friendSays(persona, ...content) {
+  const emma = persona.key === "uk_casual";
+  return h(
+    "div",
+    { class: "bubble-row" },
+    h("span", { class: `avatar${emma ? " emma" : ""}`, "aria-hidden": "true" }, persona.name[0]),
+    h("div", { class: `bubble${emma ? " emma" : ""}` }, h("div", { class: "who" }, persona.name), ...content),
+  );
+}
 
 // План урока: 1) тема разговора, 2) разбор ошибок и грамматика.
 function lessonPlan({ topic, mistakes, level, words }) {
@@ -53,8 +67,25 @@ function topicChips(topics) {
   return h(
     "div",
     { class: "chips" },
-    topics.map((topic) => h("span", { class: "badge" }, `💬 ${topic}`)),
+    topics.map((topic) => h("span", { class: "badge outline" }, topic)),
   );
+}
+
+function greeting(ctx, today, inProgress) {
+  const { mistakes, messages, topics } = today.material;
+  if (inProgress) {
+    const answered = inProgress.exercises.filter((e) => e.result).length;
+    return answered
+      ? `Урок ждёт: ${answered} из ${inProgress.exercises.length} уже готово. Добьём?`
+      : "Урок собран — давай пройдём, это минут пять.";
+  }
+  if (today.remaining === 0) return "На сегодня урок пройден. Возвращайся в чат — поболтаем!";
+  if (!messages) {
+    return "Напиши мне в чат пару фраз — и я соберу урок про наш разговор. Или начнём с темы по твоему уровню.";
+  }
+  const topic = topics[0] ? `про «${topics[0]}»` : "о разном";
+  const noticed = mistakes ? ` и я заметил ${countLabel(mistakes, ["ошибку", "ошибки", "ошибок"])}` : "";
+  return `Мы болтали ${topic}${noticed}. Соберу из этого урок?`;
 }
 
 export async function renderLessonTab(view, ctx) {
@@ -73,73 +104,88 @@ export async function renderLessonTab(view, ctx) {
 function renderHome(view, ctx, today) {
   const { me } = ctx;
   const head = pageHead(
-    `Привет, ${me.name}!`,
-    me.premium ? h("span", { class: "badge accent" }, "⭐ Премиум") : null,
+    h("span", {}, "Привет, ", h("span", { class: "hl" }, me.name)),
+    h(
+      "div",
+      { class: "chips" },
+      h("span", { class: "badge outline" }, me.level),
+      me.premium ? h("span", { class: "badge accent" }, "Премиум") : null,
+    ),
   );
   if (!me.onboarded) {
     mount(
       view,
       head,
-      h(
-        "section",
-        { class: "card empty" },
-        h("div", { class: "emoji" }, "👋"),
-        h("h2", { style: { marginTop: "8px" } }, "Сначала познакомимся"),
-        h("p", {}, "Нажми /start в чате с ботом: имя, уровень и собеседник — и можно учиться."),
-        h("div", { style: { marginTop: "16px" } }, button("Открыть чат", closeApp)),
-      ),
+      friendSays(me.persona, "Привет! Нажми /start в чате со мной — и сразу начнём болтать. Анкет не будет."),
+      button("Открыть чат", closeApp),
     );
     return;
   }
 
-  const parts = [head];
   const inProgress = today.lessons.find((lesson) => lesson.status !== "done");
   const done = today.lessons.filter((lesson) => lesson.status === "done");
+  const parts = [head, friendSays(me.persona, greeting(ctx, today, inProgress))];
   if (inProgress) {
     const answered = inProgress.exercises.filter((e) => e.result).length;
     parts.push(
       h(
         "section",
         { class: "card hero-card stack" },
-        h(
-          "div",
-          {},
-          h("h2", {}, inProgress.title),
-          h("p", {}, `Урок начат: ${answered} из ${inProgress.exercises.length} упражнений.`),
+        h("div", { class: "eyebrow" }, "Урок по разговору"),
+        h("h2", {}, inProgress.title),
+        progressLine(answered, inProgress.exercises.length),
+        button(
+          [answered ? "Продолжить урок" : "Начать урок", icon("arrow")],
+          () => playLesson(view, ctx, inProgress),
+          "btn big",
         ),
-        button(answered ? "Продолжить урок" : "Начать урок", () => playLesson(view, ctx, inProgress)),
       ),
     );
   }
-  for (const lesson of done) parts.push(doneCard(lesson));
   if (!inProgress && today.remaining > 0) parts.push(newLessonCard(view, ctx, today, done.length > 0));
+  for (const lesson of done) parts.push(doneCard(lesson));
   if (!inProgress && today.remaining === 0) {
     parts.push(
       card(
-        h("p", { class: "center" }, "Следующий урок — завтра."),
-        h("p", { class: "center muted small", style: { marginTop: "4px" } }, "А пока можно поболтать в чате 💬"),
+        h("p", { class: "muted" }, "Следующий урок — завтра. Темы и подкаст ниже — когда захочется."),
         h("div", { style: { marginTop: "14px" } }, button("Вернуться в чат", closeApp, "btn secondary")),
       ),
     );
   }
+  if (me.features?.topic_ideas) parts.push(ideasSection(ctx));
+  if (me.features?.podcast) parts.push(podcastTeaser(ctx));
   mount(view, ...parts);
 }
 
+function progressLine(done, total) {
+  return h(
+    "div",
+    { class: "row" },
+    h(
+      "div",
+      { class: "progress-track", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": total, "aria-valuenow": done },
+      h("div", { class: "progress-fill", style: { width: `${total ? (done / total) * 100 : 0}%` } }),
+    ),
+    h("span", { class: "tiny muted" }, `${done}/${total}`),
+  );
+}
+
 function newLessonCard(view, ctx, today, another) {
-  const { mistakes, words, messages, topics } = today.material;
-  const talked = messages > 0;
-  const about = talked
-    ? topics.length
-      ? h("div", { class: "stack tight" }, h("div", { class: "small muted" }, "О чём вы говорили"), topicChips(topics))
-      : h("p", {}, `Урок соберу из вашего разговора с ${ctx.me.persona.name}.`)
-    : h("p", {}, `Поболтай с ${ctx.me.persona.name} в чате — и урок будет про ваш разговор. А пока соберу его по твоим интересам и уровню.`);
+  const { mistakes, words, topics } = today.material;
+  const topic = topics[0];
   return h(
     "section",
     { class: "card hero-card stack" },
-    h("div", {}, h("h2", {}, another ? "Ещё один урок" : "Урок по твоим разговорам")),
-    about,
-    lessonPlan({ topic: topics[0], mistakes, level: ctx.me.level, words }),
-    h("button", { class: "btn big", type: "button", onclick: () => generate(view, ctx) }, "✨ Сгенерировать урок"),
+    h("div", { class: "eyebrow" }, another ? "Ещё один урок" : "Урок по разговору"),
+    h("h2", {}, topic ? h("span", { class: "hl" }, capitalize(topic)) : "Твой разговор"),
+    topics.length > 1 ? topicChips(topics.slice(1)) : null,
+    lessonPlan({ topic, mistakes, level: ctx.me.level, words }),
+    h(
+      "button",
+      { class: "btn big", type: "button", onclick: () => generate(view, ctx) },
+      "Сгенерировать урок",
+      icon("arrow"),
+    ),
     h(
       "p",
       { class: "tiny muted center" },
@@ -156,12 +202,60 @@ function doneCard(lesson) {
     h(
       "div",
       { class: "row spread" },
-      h("div", {}, h("div", { class: "small muted" }, "Урок пройден ✅"), h("h2", {}, lesson.title)),
-      h("div", { class: "badge" }, `${lesson.score ?? 0}/${lesson.total ?? 0}`),
+      h("div", {}, h("div", { class: "eyebrow" }, "Урок пройден"), h("h2", { style: { marginTop: "4px" } }, lesson.title)),
+      h("div", { class: "badge accent" }, `${lesson.score ?? 0}/${lesson.total ?? 0}`),
     ),
     lesson.topic_ru ? topicChips([lesson.topic_ru]) : null,
-    insights?.tip_ru ? h("p", { class: "small" }, `💡 ${insights.tip_ru}`) : null,
+    insights?.tip_ru ? h("div", { class: "callout small" }, insights.tip_ru) : null,
   );
+}
+
+// «Темы для тебя» на главной: заголовки грузятся отдельно, чтобы не задерживать урок.
+function ideasSection(ctx) {
+  const rail = h("div", { class: "rail" }, h("div", { class: "card" }, spinner()));
+  const section = h(
+    "section",
+    {},
+    h(
+      "div",
+      { class: "row spread", style: { margin: "26px 4px 10px" } },
+      h("h3", { style: { margin: "0" } }, "Темы для тебя"),
+      h("button", { class: "link-btn small", type: "button", onclick: () => ctx.navigate("#/topics") }, "Все темы"),
+    ),
+    rail,
+  );
+  api
+    .ideas()
+    .then((data) => {
+      if (!data.ideas.length) {
+        section.hidden = true;
+        return;
+      }
+      rail.replaceChildren(...data.ideas.slice(0, 5).map((idea) => ideaCard(idea, ctx)));
+    })
+    .catch(() => (section.hidden = true));
+  return section;
+}
+
+function podcastTeaser(ctx) {
+  const bars = [6, 14, 22, 12, 28, 18, 9, 24, 16, 30, 12, 20, 8, 26, 14, 10, 22, 6];
+  const title = h("h2", { style: { marginTop: "4px" } }, "Jake и Emma обсудят твою неделю");
+  const box = h(
+    "section",
+    { class: "card inverse stack", style: { marginTop: "26px" } },
+    h("div", { class: "row spread" }, h("div", { class: "eyebrow", style: { color: "var(--marker)" } }, "Подкаст про тебя"), icon("headphones")),
+    title,
+    h("div", { class: "wave", style: { color: "var(--marker)" }, "aria-hidden": "true" }, bars.map((v) => h("span", { style: { height: `${v + 6}px` } }))),
+    h("p", { class: "small" }, "Две минуты на английском: ваши темы, твои новые слова и пара ошибок — разобранные по-дружески."),
+    button("Слушать", () => ctx.navigate("#/podcast")),
+  );
+  api
+    .podcasts()
+    .then((data) => {
+      if (data.items[0]) title.textContent = data.items[0].title;
+    })
+    .catch(() => {});
+  return box;
 }
 
 async function generate(view, ctx) {
@@ -250,7 +344,7 @@ export function playLesson(view, ctx, lesson) {
     const top = h(
       "div",
       { class: "lesson-top" },
-      h("button", { class: "link-btn", type: "button", "aria-label": "Выйти из урока", onclick: leave }, "✕"),
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Выйти из урока", onclick: leave }, icon("close")),
       h(
         "div",
         {
@@ -376,7 +470,7 @@ function gapPrompt(sentence) {
 function audioPlayer(lessonId, index) {
   const audio = new Audio();
   let ready = null;
-  const playBtn = h("button", { class: "play", type: "button", "aria-label": "Прослушать" }, "▶");
+  const playBtn = h("button", { class: "play", type: "button", "aria-label": "Прослушать" }, icon("play"));
   const load = () => {
     ready ??= api
       .audio(lessonId, index)
@@ -395,14 +489,14 @@ function audioPlayer(lessonId, index) {
     try {
       await load();
       audio.currentTime = 0;
-      playBtn.textContent = "🔊";
+      playBtn.replaceChildren(icon("pause"));
       await audio.play();
     } catch (error) {
-      playBtn.textContent = "▶";
+      playBtn.replaceChildren(icon("play"));
       toast(error?.message || "Не получилось воспроизвести");
     }
   });
-  audio.addEventListener("ended", () => (playBtn.textContent = "▶"));
+  audio.addEventListener("ended", () => playBtn.replaceChildren(icon("play")));
   return h(
     "div",
     { class: "center", style: { margin: "8px 0 4px" } },
@@ -479,14 +573,17 @@ function exerciseCard(lesson, exercise, next) {
 }
 
 export function flashcard(item, next, label = "Слово из твоих разговоров") {
+  // «Прокачка слов»: спереди — простое слово ученика, за ним — как сказать сильнее.
+  const upgrade = item.source === "upgrade" && item.note;
   const reveal = h(
     "div",
     { class: "stack center", hidden: true },
+    upgrade ? h("div", { class: "term" }, h("span", { class: "hl" }, item.term)) : null,
     h("div", { class: "translation" }, item.translation_ru || "—"),
     item.example ? h("div", { class: "example" }, item.example) : null,
   );
   const grades = h("div", { class: "btn-row", hidden: true });
-  const showBtn = button("Показать перевод", () => {
+  const showBtn = button(upgrade ? "Показать" : "Показать перевод", () => {
     reveal.hidden = false;
     showBtn.hidden = true;
     grades.hidden = false;
@@ -505,9 +602,12 @@ export function flashcard(item, next, label = "Слово из твоих раз
   const again = button("Не помню", () => grade("again", [again, good]), "btn secondary");
   const good = button("Помню", () => grade("good", [again, good]));
   grades.append(again, good);
+  const front = upgrade
+    ? h("div", { class: "stack tight center" }, h("div", { class: "small muted" }, "Как сказать сильнее, чем"), h("div", { class: "term pen" }, item.note))
+    : h("div", { class: "term" }, item.term);
   return card(
-    h("div", { class: "question-label center" }, label),
-    h("div", { class: "flashcard" }, h("div", { class: "term" }, item.term), reveal),
+    h("div", { class: "question-label center" }, upgrade ? "Прокачка слов" : label),
+    h("div", { class: "flashcard" }, front, reveal),
     showBtn,
     grades,
   );
@@ -523,18 +623,19 @@ function finishCard(lesson, ctx) {
         Object.assign(lesson, done);
         const ratio = done.total ? done.score / done.total : 0;
         haptic("success");
-        box.replaceChildren(
-          h("div", { class: "emoji" }, ratio >= 0.8 ? "🎉" : ratio >= 0.5 ? "💪" : "🌱"),
-          h("div", { class: "score", style: { marginTop: "8px" } }, `${done.score}/${done.total}`),
+        mount(
+          box,
+          h("div", { class: "eyebrow" }, ratio >= 0.8 ? "Отлично" : ratio >= 0.5 ? "Хороший результат" : "Есть над чем поработать"),
+          h("div", { class: "score", style: { marginTop: "10px" } }, h("span", { class: "hl" }, `${done.score}/${done.total}`)),
           h("p", {}, "правильных ответов"),
           done.topic
             ? h(
                 "p",
-                { style: { marginTop: "14px", color: "var(--text)" } },
+                { style: { marginTop: "14px", color: "var(--ink)" } },
                 `${ctx.me.persona.name} уже пишет тебе в чат — поболтаем про «${done.topic}».`,
               )
             : null,
-          done.insights?.tip_ru ? h("p", { class: "small" }, `💡 ${done.insights.tip_ru}`) : null,
+          done.insights?.tip_ru ? h("div", { class: "callout small", style: { textAlign: "left" } }, done.insights.tip_ru) : null,
           h(
             "div",
             { class: "stack", style: { marginTop: "18px" } },

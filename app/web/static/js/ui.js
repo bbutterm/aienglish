@@ -49,7 +49,7 @@ export function errorCard(error, retry) {
   return h(
     "section",
     { class: "card empty" },
-    h("div", { class: "emoji" }, "😕"),
+    h("h2", {}, "Не получилось"),
     h("p", {}, error?.message || "Что-то пошло не так."),
     retry ? h("div", { style: { marginTop: "14px" } }, button("Повторить", retry, "btn secondary")) : null,
   );

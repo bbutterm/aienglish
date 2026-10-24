@@ -24,9 +24,15 @@ const KIND_LABELS = {
   llm_analyst: "Аналитик",
   llm_summary: "Саммари",
   llm_lesson: "Генерация уроков",
+  llm_ideas: "Темы для тебя",
+  llm_idea_content: "Содержание тем",
+  llm_rewrite: "Как сказать лучше",
+  llm_extract: "Слова с фото и из постов",
+  llm_podcast: "Сценарии подкастов",
   stt: "Распознавание речи",
   tts: "Озвучка ответов",
   tts_lesson: "Аудирование в уроках",
+  tts_podcast: "Озвучка подкастов",
 };
 
 const MODES = { chat: "просто болтаем", correct: "с исправлениями", review: "разбор потом" };
@@ -50,7 +56,7 @@ function userBadges(user) {
   return h(
     "span",
     { class: "chips" },
-    user.premium ? h("span", { class: "badge accent" }, "⭐ премиум") : null,
+    user.premium ? h("span", { class: "badge accent" }, "премиум") : null,
     user.blocked ? h("span", { class: "badge danger" }, "заблокирован") : null,
     !user.onboarded ? h("span", { class: "badge" }, "без онбординга") : null,
   );
@@ -163,8 +169,84 @@ export async function renderAdmin(view, ctx, params = {}) {
       ),
     );
   }
+  parts.push(h("h3", {}, "Фичи"), featuresSection(ctx));
+  parts.push(h("h3", {}, "Откуда приходят · 30 дней"), sourcesSection());
   parts.push(h("h3", {}, "Пользователи"), usersSection(ctx));
   mount(view, ...parts);
+}
+
+// Переключатели фич: состояние в БД, бот и приложение подхватывают его за ~10 секунд.
+function featuresSection(ctx) {
+  const list = h("ul", { class: "list" }, h("li", {}, h("div", { class: "spinner" })));
+  const draw = (features) => {
+    list.replaceChildren(
+      ...features.map((f) => {
+        const toggle = h("button", {
+          class: "switch",
+          type: "button",
+          role: "switch",
+          "aria-checked": String(f.enabled),
+          "aria-label": f.title,
+        });
+        toggle.addEventListener("click", async () => {
+          toggle.disabled = true;
+          try {
+            const data = await api.admin.setFeature(f.key, !f.enabled);
+            haptic("success");
+            toast(`${f.title}: ${f.enabled ? "выключено" : "включено"}`);
+            ctx.me.features[f.key] = !f.enabled;
+            draw(data.features);
+          } catch (error) {
+            toggle.disabled = false;
+            toast(error.message);
+          }
+        });
+        return h(
+          "li",
+          { class: "feature" },
+          h(
+            "div",
+            { class: "info" },
+            h("div", { class: "name" }, f.title),
+            h("div", { class: "small muted", style: { marginTop: "2px" } }, f.description),
+            h("div", { class: "tiny muted", style: { marginTop: "4px" } }, `где: ${f.where}`),
+          ),
+          toggle,
+        );
+      }),
+    );
+  };
+  api.admin
+    .features()
+    .then((data) => draw(data.features))
+    .catch((error) => list.replaceChildren(h("li", { class: "muted" }, error.message)));
+  return h("section", { class: "card flush" }, list);
+}
+
+function sourcesSection() {
+  const box = h("div", {}, h("section", { class: "card" }, h("div", { class: "spinner" })));
+  api.admin
+    .sources(30)
+    .then((data) => {
+      if (!data.sources.length) {
+        box.replaceChildren(card(h("p", { class: "muted small" }, "Новых пользователей за 30 дней нет.")));
+        return;
+      }
+      box.replaceChildren(
+        barList({
+          title: "Новые пользователи по источникам",
+          subtitle: "метка из ссылки t.me/бот?start=… · освоились — 5+ реплик",
+          columns: ["Источник", "Пользователей"],
+          items: data.sources.map((s) => ({
+            label: s.source === "direct" ? "без метки" : s.source,
+            value: s.users,
+            note: `освоились ${s.activated} · премиум ${s.premium}`,
+          })),
+        }),
+      );
+    })
+    .catch((error) => box.replaceChildren(card(h("p", { class: "muted small" }, error.message))));
+  return box;
 }
 
 function usersSection(ctx) {

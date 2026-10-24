@@ -173,7 +173,10 @@ def _cards(material: Material, examples: dict[int, str]) -> list[dict[str, Any]]
             "vocab_id": v.id,
             "term": v.term,
             "translation_ru": v.translation_ru,
-            "example": examples.get(v.id),
+            # у «прокачки» пример — фраза самого ученика с новым словом
+            "example": v.example if v.source == "upgrade" and v.example else examples.get(v.id),
+            "source": v.source,
+            "note": v.note,
         }
         for v in material.vocab[:MAX_CARDS]
     ]

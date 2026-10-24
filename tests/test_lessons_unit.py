@@ -135,6 +135,8 @@ def test_build_payload_validates_and_shuffles() -> None:
             "term": "blockbuster",
             "translation_ru": "блокбастер",
             "example": "It was a real blockbuster.",
+            "source": None,
+            "note": None,
         }
     ]
     assert payload["insights"]["strengths"] == ["Смелые фразы"]
