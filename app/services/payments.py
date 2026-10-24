@@ -4,7 +4,6 @@
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from aiogram import Bot
 from aiogram.types import LabeledPrice, SuccessfulPayment
@@ -100,13 +99,9 @@ async def apply_payment(
     charge = payment.telegram_payment_charge_id
     if await session.scalar(select(Payment.id).where(Payment.charge_id == charge)):
         return None
-    if plan.subscription and payment.subscription_expiration_date:
-        expires = datetime.fromtimestamp(payment.subscription_expiration_date, UTC)
-        now = datetime.now(UTC)
-        current = user.premium_until if user.premium_until and user.premium_until > now else now
-        user.premium_until = max(current, expires)
-    else:
-        extend_premium(user, plan.days)
+    # Каждый платёж (и каждое продление подписки) добавляет оплаченные дни к текущему концу
+    # премиума — поверх пропуска, бонуса за друга или выдачи админом.
+    extend_premium(user, plan.days)
     record = Payment(
         user_id=user.id,
         plan=plan.key,

@@ -35,7 +35,8 @@ def parse_words(raw: str, source: str, limit: int) -> tuple[list[VocabItem], str
     data = extract_json_object(raw)
     words: list[VocabItem] = []
     seen: set[str] = set()
-    for item in data.get("words") or []:
+    raw_words = data.get("words")
+    for item in raw_words if isinstance(raw_words, list) else []:
         if not isinstance(item, dict):
             continue
         term = item.get("term")

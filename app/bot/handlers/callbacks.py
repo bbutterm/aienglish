@@ -94,6 +94,7 @@ async def on_rewrite(
         .order_by(Message.id.desc())
         .limit(1)
     )
+    await session.commit()  # запрос к модели — без открытой транзакции
     try:
         rewrite, llm = await dialog.rewriter.rewrite(user, original.text, prev_bot)
     except (LLMError, ValueError):

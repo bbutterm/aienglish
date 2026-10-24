@@ -57,6 +57,8 @@ async def after_turn(
         await mission_progress(bot, chat_id, session, user, dialog, turn)
         return  # во время сцены не отвлекаем подсказками
     messages = await journey.user_messages(session, user.id)
+    # Дальше может быть ожидание аналитика до 20 с — соединение с БД не держим.
+    await session.commit()
     if flags["referrals"]:
         await referral_reward(bot, session, user, messages)
     if flags["first_steps"]:
@@ -74,6 +76,7 @@ async def mission_progress(
     dialog: DialogService,
     turn: Turn,
 ) -> None:
+    await session.commit()  # ждём аналитика без открытой транзакции
     new_goals = await analysis_result(turn)
     await session.refresh(user, ["active_mission"])
     mission = user.active_mission
@@ -188,7 +191,8 @@ async def first_steps(
     turn: Turn,
     messages: int,
 ) -> None:
-    if set(journey.ALL_HINTS) <= set(user.hints) or messages < journey.INSIGHT_AFTER:
+    app = bool(dialog.settings.webapp_url)
+    if journey.required_hints(app) <= set(user.hints) or messages < journey.INSIGHT_AFTER:
         return
     # Подсказки опираются на разбор этой реплики: ошибки, простые слова, оценку уровня.
     await analysis_result(turn)
@@ -198,10 +202,9 @@ async def first_steps(
         mistakes, upgrades = await journey.insight_items(session, user)
     has_insight = bool(mistakes or upgrades)
 
-    hint = journey.next_hint(user, messages, has_insight, app=bool(dialog.settings.webapp_url))
-    if hint is None:
+    hint = journey.next_hint(user, messages, has_insight, app=app)
+    if hint is None or not await journey.mark_hint(session, user, hint):
         return
-    await journey.mark_hint(session, user, hint)
     if hint == journey.HINT_INSIGHT:
         if not has_insight:
             return  # за 10 реплик ни одной ошибки — просто не показываем
@@ -246,9 +249,11 @@ async def photo_words(
     """Фоновая задача: 5 слов с фото в карточки и короткое сообщение со списком."""
     async with dialog.session_factory() as session:
         user = await session.get(User, user_id)
-        if user is None:
-            return
-        extracted = await dialog.extractor.from_photo(user, image)
+    if user is None:
+        return
+    # Запрос к модели — без открытого соединения с БД.
+    extracted = await dialog.extractor.from_photo(user, image)
+    async with dialog.session_factory() as session:
         await record_llm(session, user.id, "llm_extract", extracted.llm)
         await repo.save_vocab(session, user.id, extracted.words)
         await session.commit()
@@ -270,6 +275,10 @@ async def start_mission(
     """Миссия из «Тем для тебя»: карточка сцены с целями и первая реплика собеседника в роли."""
     from app.bot.handlers.common import send_opener  # common импортирует этот модуль
 
+    await session.refresh(user, ["active_mission"], with_for_update=True)
+    if user.active_mission:
+        await session.commit()
+        return  # параллельный запуск уже начал сцену
     mistakes = (
         await session.scalar(select(func.count(Mistake.id)).where(Mistake.user_id == user.id))
     ) or 0

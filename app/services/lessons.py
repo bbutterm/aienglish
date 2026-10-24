@@ -187,7 +187,8 @@ def clean_topic_block(raw: object) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     phrases = []
-    for item in raw.get("phrases") or []:
+    raw_phrases = raw.get("phrases")
+    for item in raw_phrases if isinstance(raw_phrases, list) else []:
         if not isinstance(item, dict) or not (en := _text(item.get("en"), 80)):
             continue
         phrases.append(
@@ -210,12 +211,18 @@ def clean_grammar(raw: object, mistake_ids: set[int]) -> list[dict[str, Any]]:
         title, rule = _text(item.get("title_ru"), 60), _text(item.get("rule_ru"), 600)
         if not title or not rule:
             continue
+        raw_examples = item.get("examples")
         examples = [
             {"en": en, "ru": _text(example.get("ru"), 160)}
-            for example in (item.get("examples") or [])[:3]
+            for example in (raw_examples if isinstance(raw_examples, list) else [])[:3]
             if isinstance(example, dict) and (en := _text(example.get("en"), 160))
         ]
-        ids = [i for i in item.get("mistake_ids") or [] if i in mistake_ids]
+        raw_ids = item.get("mistake_ids")
+        ids = [
+            i
+            for i in (raw_ids if isinstance(raw_ids, list) else [])
+            if isinstance(i, int) and i in mistake_ids
+        ]
         points.append(
             {"title_ru": title, "rule_ru": rule, "examples": examples, "mistake_ids": ids}
         )
@@ -242,7 +249,8 @@ def build_payload(raw: dict[str, Any], material: Material, rng: random.Random) -
     """Ответ модели → урок. ValueError, если годных упражнений слишком мало."""
     mistake_ids = {m.id for m in material.mistakes}
     exercises = []
-    for item in raw.get("exercises") or []:
+    raw_exercises = raw.get("exercises")
+    for item in raw_exercises if isinstance(raw_exercises, list) else []:
         exercise = clean_exercise(item, mistake_ids, rng)
         if exercise:
             section = item.get("section")
@@ -258,9 +266,11 @@ def build_payload(raw: dict[str, Any], material: Material, rng: random.Random) -
     exercises.sort(key=lambda e: SECTIONS.index(e["section"]))
 
     examples: dict[int, str] = {}
-    for card in raw.get("cards") or []:
-        if isinstance(card, dict) and (example := _text(card.get("example"), 200)):
-            examples.setdefault(card.get("vocab_id"), example)
+    raw_cards = raw.get("cards")
+    for card in raw_cards if isinstance(raw_cards, list) else []:
+        vocab_id = card.get("vocab_id") if isinstance(card, dict) else None
+        if isinstance(vocab_id, int) and (example := _text(card.get("example"), 200)):
+            examples.setdefault(vocab_id, example)
     topic_ru = _text(raw.get("topic_ru"), 40) or (material.topics[0] if material.topics else None)
     return {
         "version": 2,
@@ -506,10 +516,12 @@ class LessonService:
         system = render(
             "lesson_system.md.j2", user_name=user.name, level=user.level, persona_name=persona.name
         )
+        content = await self._material_json(session, user, material)
+        await session.commit()  # запрос к модели — без открытой транзакции
         result = await self._llm.chat(
             [
                 {"role": "system", "content": system},
-                {"role": "user", "content": await self._material_json(session, user, material)},
+                {"role": "user", "content": content},
             ],
             models=[self._settings.lesson_model, self._settings.companion_fallback_model],
             temperature=0.7,

@@ -28,6 +28,7 @@ MAX_UNANSWERED = 3
 MIN_MESSAGES = 3
 QUIET_HOURS = (22, 9)  # с 22:00 до 9:00 по времени пользователя не пишем
 BATCH = 50
+CANDIDATES = 1000  # из них отбираем тех, у кого сейчас не ночь
 TICK_SECONDS = 300
 
 
@@ -64,9 +65,9 @@ async def due_users(session: AsyncSession, now: datetime) -> list[User]:
             talked >= MIN_MESSAGES,
         )
         .order_by(User.last_active_at)
-        .limit(BATCH)
+        .limit(CANDIDATES)
     )
-    return [user for user in rows if awake(user, now)]
+    return [user for user in rows if awake(user, now)][:BATCH]
 
 
 class PingScheduler:

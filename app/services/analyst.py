@@ -58,7 +58,8 @@ def parse_analysis(raw: str, goals: int = 0) -> Analysis:
     data = extract_json_object(raw)
 
     analysis = Analysis()
-    for item in data.get("mistakes") or []:
+    raw_mistakes = data.get("mistakes")
+    for item in raw_mistakes if isinstance(raw_mistakes, list) else []:
         if not isinstance(item, dict):
             continue
         original = _clean_str(item.get("original"))
@@ -83,7 +84,8 @@ def parse_analysis(raw: str, goals: int = 0) -> Analysis:
             break
 
     seen: set[str] = set()
-    for item in data.get("vocab") or []:
+    raw_vocab = data.get("vocab")
+    for item in raw_vocab if isinstance(raw_vocab, list) else []:
         if not isinstance(item, dict):
             continue
         term = _clean_str(item.get("term"), 100)

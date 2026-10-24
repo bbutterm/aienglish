@@ -1,6 +1,8 @@
 """API включаемых фич: «Темы для тебя» и миссии, подкаст, приглашения, переключатели в админке."""
 
 import logging
+from datetime import UTC, datetime, timedelta
+from html import escape
 from typing import Annotated, Any
 
 from aiogram.types import BufferedInputFile
@@ -23,6 +25,9 @@ from app.web.deps import AdminDep, SessionDep, StateDep, UserDep, WebState, api_
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+RESTART_AFTER = timedelta(minutes=10)
+STARTS_PER_DAY = 10
 
 ERRORS = {
     "feature_off": (404, "Эта функция сейчас выключена."),
@@ -62,8 +67,7 @@ async def ideas(user: UserDep, state: StateDep, session: SessionDep) -> dict[str
     if not items and user.onboarded and await state.ideas.refreshes_left(session, user) > 0:
         # Первый заход: заголовки готовы сразу, без лишней кнопки.
         try:
-            await state.ideas.generate(session, user, missions)
-            items = await state.ideas.visible(session, user, missions)
+            items = await state.ideas.generate(session, user, missions, only_if_empty=True)
         except IdeaError as exc:
             logger.warning("Ideas generation failed for %s: %s", user.id, exc.code)
     return {
@@ -114,6 +118,18 @@ async def start_idea(
             idea = await state.ideas.open(session, user, idea)
         except IdeaError as exc:
             raise error(exc.code) from exc
+    now = datetime.now(UTC)
+    if idea.started_at and now - idea.started_at < RESTART_AFTER:
+        return {"ok": True, "kind": idea.kind}  # уже пишет в чат — второй раз не дёргаем модель
+    started_today = await session.scalar(
+        select(func.count(TopicIdea.id)).where(
+            TopicIdea.user_id == user.id, TopicIdea.started_at >= now - timedelta(days=1)
+        )
+    )
+    if (started_today or 0) >= STARTS_PER_DAY:
+        raise error("limit_reached")
+    idea.started_at = now
+    await session.commit()
     starter = start_mission if idea.kind == "mission" else start_talk
     state.tasks.spawn(chat_start(state, user.id, idea.id, starter), name=f"idea:{user.id}")
     return {"ok": True, "kind": idea.kind}
@@ -185,7 +201,7 @@ async def send_podcast(
     await state.bot.send_audio(
         user.id,
         BufferedInputFile(podcast.audio, filename="english-buddy-podcast.mp3"),
-        caption=texts.PODCAST_CAPTION.format(title=podcast.title),
+        caption=texts.PODCAST_CAPTION.format(title=escape(podcast.title)),
         title=podcast.title,
         performer="Jake & Emma · English Buddy",
     )

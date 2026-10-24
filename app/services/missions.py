@@ -6,6 +6,7 @@
 """
 
 from datetime import UTC, datetime, timedelta
+from html import escape
 from typing import Any
 
 MISSION_TTL = timedelta(hours=24)
@@ -54,5 +55,6 @@ def new_mission(idea_id: int, title_ru: str, content: dict[str, Any], mistakes: 
 def goals_list_ru(mission: dict[str, Any]) -> str:
     done = set(mission.get("done", []))
     return "\n".join(
-        f"{'✅' if i in done else '▫️'} {goal['ru']}" for i, goal in enumerate(mission["goals"])
+        f"{'✅' if i in done else '▫️'} {escape(goal['ru'])}"
+        for i, goal in enumerate(mission["goals"])
     )

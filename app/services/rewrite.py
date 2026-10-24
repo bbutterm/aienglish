@@ -27,7 +27,8 @@ def parse_rewrite(raw: str, original: str) -> Rewrite:
     native = data.get("native")
     native = " ".join(native.split()) if isinstance(native, str) and native.strip() else original
     changes = []
-    for item in data.get("changes") or []:
+    raw_changes = data.get("changes")
+    for item in raw_changes if isinstance(raw_changes, list) else []:
         if not isinstance(item, dict):
             continue
         before, after = item.get("from"), item.get("to")

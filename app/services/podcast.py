@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db.models import Message, Mistake, Podcast, User, Vocab
+from app.db.models import Message, Mistake, Podcast, Usage, User, Vocab
 from app.llm.jsonutil import extract_json_object
 from app.llm.openrouter import LLMError, OpenRouterClient
 from app.personas import PERSONAS
@@ -44,7 +44,8 @@ def clean_script(raw: dict[str, Any]) -> dict[str, Any]:
     """Сценарий от модели → реплики двух ведущих в пределах лимита символов."""
     lines: list[dict[str, str]] = []
     total = 0
-    for item in raw.get("lines") or []:
+    raw_lines = raw.get("lines")
+    for item in raw_lines if isinstance(raw_lines, list) else []:
         if not isinstance(item, dict):
             continue
         speaker = str(item.get("speaker") or "").strip().lower()
@@ -60,9 +61,10 @@ def clean_script(raw: dict[str, Any]) -> dict[str, Any]:
             break
     if len(lines) < 4:
         raise ValueError("podcast script is too short")
+    raw_words = raw.get("words")
     words = [
         {"en": w["en"].strip()[:80], "ru": str(w.get("ru") or "").strip()[:80]}
-        for w in raw.get("words") or []
+        for w in (raw_words if isinstance(raw_words, list) else [])
         if isinstance(w, dict) and isinstance(w.get("en"), str) and w["en"].strip()
     ][:5]
     title = raw.get("title")
@@ -143,10 +145,12 @@ class PodcastService:
         return list(rows)
 
     async def remaining(self, session: AsyncSession, user: User) -> int:
+        """Сколько выпусков ещё можно за 7 дней. Считаем написанные сценарии: неудачная озвучка
+        тоже стоила денег, поэтому повтор после ошибки расходует попытку."""
         since = datetime.now(UTC) - timedelta(days=7)
         made = await session.scalar(
-            select(func.count(Podcast.id)).where(
-                Podcast.user_id == user.id, Podcast.created_at >= since
+            select(func.count(Usage.id)).where(
+                Usage.user_id == user.id, Usage.kind == "llm_podcast", Usage.created_at >= since
             )
         )
         limit = PREMIUM_PER_WEEK if is_premium(user) else PER_WEEK
@@ -159,7 +163,9 @@ class PodcastService:
         async with lock:
             if await self.remaining(session, user) <= 0:
                 raise PodcastError("limit_reached")
-            script = await self._script(session, user)
+            material = await self._material(session, user)
+            await session.commit()  # модель и озвучка — без открытой транзакции
+            script = await self._script(session, user, material)
             audio, chars = await self._voice(session, user, script["lines"])
             podcast = Podcast(
                 user_id=user.id,
@@ -173,13 +179,13 @@ class PodcastService:
             await session.commit()
             return podcast
 
-    async def _script(self, session: AsyncSession, user: User) -> dict[str, Any]:
+    async def _script(self, session: AsyncSession, user: User, material: str) -> dict[str, Any]:
         system = render("podcast_system.md.j2", user_name=user.name, level=user.level)
         try:
             result = await self._llm.chat(
                 [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": await self._material(session, user)},
+                    {"role": "user", "content": material},
                 ],
                 models=[self._settings.lesson_model, self._settings.companion_fallback_model],
                 temperature=0.9,
@@ -207,13 +213,14 @@ class PodcastService:
             async with semaphore:
                 return await self._tts.synthesize_raw(line["text"], voice, audio_format)
 
-        try:
-            parts = await asyncio.gather(*(speak(line) for line in lines))
-        except TTSError:
-            logger.warning("Podcast TTS failed for %s", user.id, exc_info=True)
-            await session.commit()
-            raise PodcastError("audio_failed") from None
-        chars = sum(len(line["text"]) for line in lines)
+        results = await asyncio.gather(*(speak(line) for line in lines), return_exceptions=True)
+        failed = [r for r in results if isinstance(r, BaseException)]
+        # ElevenLabs берёт деньги за каждую озвученную реплику — учитываем и при неудаче.
+        chars = sum(
+            len(line["text"])
+            for line, r in zip(lines, results, strict=True)
+            if not isinstance(r, BaseException)
+        )
         await record_usage(
             session,
             user_id=user.id,
@@ -222,7 +229,13 @@ class PodcastService:
             chars=chars,
             cost_usd=tts_cost(chars, self._settings),
         )
-        return await join_mp3(list(parts)), chars
+        if failed:
+            logger.warning("Podcast TTS failed for %s: %s", user.id, failed[0])
+            await session.commit()
+            if not all(isinstance(e, TTSError) for e in failed):
+                raise failed[0]
+            raise PodcastError("audio_failed")
+        return await join_mp3([r for r in results if isinstance(r, bytes)]), chars
 
     async def _material(self, session: AsyncSession, user: User) -> str:
         since = datetime.now(UTC) - timedelta(days=7)

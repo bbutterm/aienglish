@@ -1,5 +1,6 @@
 """«Темы для тебя»: личные темы и миссии. Заголовки — сразу, содержание — по нажатию."""
 
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -120,6 +121,7 @@ class IdeaService:
     def __init__(self, llm: OpenRouterClient, settings: Settings) -> None:
         self._llm = llm
         self._settings = settings
+        self._locks: dict[int, asyncio.Lock] = {}
 
     async def visible(self, session: AsyncSession, user: User, missions: bool) -> list[TopicIdea]:
         since = datetime.now(UTC) - timedelta(days=VISIBLE_DAYS)
@@ -144,12 +146,23 @@ class IdeaService:
         used = await repo.count_usage_since(session, user.id, "llm_ideas", since)
         return max(0, limit - used)
 
-    async def generate(self, session: AsyncSession, user: User, missions: bool) -> list[TopicIdea]:
-        """Новая порция заголовков; содержимое — позже, по нажатию."""
+    async def generate(
+        self, session: AsyncSession, user: User, missions: bool, only_if_empty: bool = False
+    ) -> list[TopicIdea]:
+        """Новая порция заголовков; содержимое — позже, по нажатию.
+
+        only_if_empty — первый заход: если параллельный запрос уже придумал темы, отдаём их.
+        """
         if not user.onboarded:
             raise IdeaError("not_onboarded")
-        if await self.refreshes_left(session, user) <= 0:
-            raise IdeaError("limit_reached")
+        async with self._locks.setdefault(user.id, asyncio.Lock()):
+            if only_if_empty and (existing := await self.visible(session, user, missions)):
+                return existing
+            if await self.refreshes_left(session, user) <= 0:
+                raise IdeaError("limit_reached")
+            return await self._generate(session, user, missions)
+
+    async def _generate(self, session: AsyncSession, user: User, missions: bool) -> list[TopicIdea]:
         persona = get_persona(user.persona)
         system = render(
             "ideas_system.md.j2",
@@ -159,11 +172,13 @@ class IdeaService:
             talks=TALKS_PER_BATCH,
             missions=MISSIONS_PER_BATCH if missions else 0,
         )
+        profile = await self._profile(session, user)
+        await session.commit()  # запрос к модели — без открытой транзакции
         try:
             result = await self._llm.chat(
                 [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": await self._profile(session, user)},
+                    {"role": "user", "content": profile},
                 ],
                 models=[self._settings.lesson_model, self._settings.companion_fallback_model],
                 temperature=0.9,
@@ -184,7 +199,7 @@ class IdeaService:
         rows = [TopicIdea(user_id=user.id, **idea) for idea in ideas]
         session.add_all(rows)
         await session.commit()
-        return rows
+        return await self.visible(session, user, missions)
 
     async def open(self, session: AsyncSession, user: User, idea: TopicIdea) -> TopicIdea:
         """Содержимое темы генерируется один раз — при первом открытии."""
@@ -201,11 +216,13 @@ class IdeaService:
             title_ru=idea.title_ru,
             focus_ru=idea.focus_ru,
         )
+        profile = await self._profile(session, user)
+        await session.commit()
         try:
             result = await self._llm.chat(
                 [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": await self._profile(session, user)},
+                    {"role": "user", "content": profile},
                 ],
                 models=[self._settings.lesson_model, self._settings.companion_fallback_model],
                 temperature=0.7,

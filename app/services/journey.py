@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Message, Mistake, User, Vocab
@@ -18,6 +18,7 @@ from app.services.plans import extend_premium
 LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 REFERRAL_DAYS = 7
 REFERRAL_ACTIVATION = 5  # столько реплик должен сделать приглашённый
+MAX_ID_DIGITS = 15  # telegram id помещается в BIGINT; длиннее — мусор в ссылке
 _PAYLOAD_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 HINT_INSIGHT = "first_insight"
@@ -41,7 +42,7 @@ def parse_start(args: str | None) -> StartPayload:
     """Параметр /start: ref_<telegram id> — приглашение, остальное — метка источника."""
     if not args or not _PAYLOAD_RE.match(args):
         return StartPayload(None, None)
-    if args.startswith("ref_") and args[4:].isdigit():
+    if args.startswith("ref_") and args[4:].isdigit() and len(args) <= 4 + MAX_ID_DIGITS:
         return StartPayload("ref", int(args[4:]))
     return StartPayload(args.lower(), None)
 
@@ -70,11 +71,26 @@ async def user_messages(session: AsyncSession, user_id: int) -> int:
 
 
 async def reward_referral(session: AsyncSession, user: User, messages: int) -> User | None:
-    """Приглашённый освоился — обоим неделя премиума. Возвращает пригласившего, если наградили."""
+    """Приглашённый освоился — обоим неделя премиума. Возвращает пригласившего, если наградили.
+
+    Две реплики подряд обрабатываются параллельно, поэтому награду «забираем» одним UPDATE:
+    выдаст её только тот обработчик, который первым поменял флаг.
+    """
     if not user.referred_by or user.referral_rewarded or messages < REFERRAL_ACTIVATION:
         return None
-    referrer = await session.get(User, user.referred_by)
-    user.referral_rewarded = True
+    claimed = await session.scalar(
+        update(User)
+        .where(User.id == user.id, User.referral_rewarded.is_(False))
+        .values(referral_rewarded=True)
+        .returning(User.id)
+    )
+    if claimed is None:
+        await session.commit()
+        return None
+    referrer = await session.get(
+        User, user.referred_by, with_for_update=True, populate_existing=True
+    )
+    await session.refresh(user, ["premium_until", "referral_rewarded"], with_for_update=True)
     if referrer is None or referrer.blocked:
         await session.commit()
         return None
@@ -89,10 +105,22 @@ def level_gap(level: str, estimated: str | None) -> bool:
     return estimated in LEVELS and level in LEVELS and estimated != level
 
 
-async def mark_hint(session: AsyncSession, user: User, key: str) -> None:
-    if key not in user.hints:
-        user.hints = [*user.hints, key]
-        await session.commit()
+async def mark_hint(session: AsyncSession, user: User, key: str) -> bool:
+    """Отмечает подсказку показанной. False — её уже показал параллельный обработчик."""
+    claimed = await session.scalar(
+        update(User)
+        .where(User.id == user.id, ~User.hints.contains([key]))
+        .values(hints=User.hints.op("||")(func.jsonb_build_array(key)))
+        .returning(User.id)
+    )
+    await session.commit()
+    await session.refresh(user, ["hints"])
+    return claimed is not None
+
+
+def required_hints(app: bool) -> set[str]:
+    """Какие подсказки вообще могут быть показаны: без Mini App приглашения в урок нет."""
+    return set(ALL_HINTS) - (set() if app else {HINT_APP})
 
 
 async def insight_items(

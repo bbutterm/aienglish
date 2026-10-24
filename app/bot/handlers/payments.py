@@ -42,11 +42,16 @@ async def cmd_premium(
 
 
 @router.pre_checkout_query()
-async def on_pre_checkout(query: PreCheckoutQuery, settings: Settings) -> None:
+async def on_pre_checkout(
+    query: PreCheckoutQuery, session: AsyncSession, settings: Settings
+) -> None:
     # Ответить нужно за 10 секунд — только сверяем счёт с пользователем и ценой.
     problem = payments.check_checkout(
         query.invoice_payload, query.from_user.id, query.total_amount, settings
     )
+    payer = await session.get(User, query.from_user.id)
+    if payer is None or payer.blocked:
+        problem = texts.PAYMENT_UNAVAILABLE
     await query.answer(ok=problem is None, error_message=problem)
 
 
