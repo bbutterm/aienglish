@@ -91,6 +91,8 @@ async def run(settings: Settings) -> None:
     bot = Bot(settings.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
     try:
+        # getUpdates не работает, пока у бота висит webhook (например, от прошлого хостинга).
+        await bot.delete_webhook()
         await bot.set_my_commands(BOT_COMMANDS)
         logger.info("Starting long polling")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

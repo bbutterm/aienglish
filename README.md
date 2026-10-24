@@ -28,6 +28,14 @@ docker compose logs -f bot
 Сервисы: `bot` (при старте сам применяет миграции `alembic upgrade head`, long polling), `db` (Postgres 16
 с volume) и `backup` (ежедневный `pg_dump` в `./backups`, хранит 14 дней).
 
+Перед первым запуском стоит прогнать проверку ключей и внешних API (тратит меньше цента):
+
+```bash
+docker compose run --rm bot python -m app.preflight
+```
+
+Пошаговая инструкция для агента, который разворачивает бота на сервере, — [DEPLOY.md](DEPLOY.md).
+
 ## Локальная разработка
 
 Нужны Python 3.12, [uv](https://docs.astral.sh/uv/), Postgres 16 и ffmpeg.
@@ -52,6 +60,7 @@ uv run ruff check . && uv run ruff format --check .
 ```
 app/
 ├─ main.py               сборка сервисов и диспетчера, long polling
+├─ preflight.py          проверка ключей и внешних API перед запуском
 ├─ config.py             настройки из .env (pydantic-settings)
 ├─ personas.py           собеседники: имя, биография, голос
 ├─ bot/
