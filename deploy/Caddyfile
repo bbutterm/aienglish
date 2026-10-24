@@ -1,0 +1,6 @@
+# HTTPS для Mini App: Caddy сам получает и продлевает сертификат для WEBAPP_DOMAIN
+# (Let's Encrypt, при неудаче — ZeroSSL). Нужны открытые порты 80 и 443.
+{$WEBAPP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8000
+}

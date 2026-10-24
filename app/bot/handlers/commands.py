@@ -6,13 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.handlers.common import send_opener
-from app.bot.keyboards import modes_kb, voice_kb
+from app.bot.keyboards import modes_kb, voice_kb, webapp_kb
 from app.bot.onboarding import start_onboarding
 from app.config import Settings
 from app.db import repo
 from app.db.models import User
 from app.personas import get_persona
 from app.services.dialog import DialogService
+from app.services.plans import is_premium, limits_for
 from app.services.review import build_review, format_mistakes
 from app.services.usage import collect_stats, format_stats
 
@@ -35,14 +36,14 @@ def voice_menu_text(user: User) -> str:
 
 
 @router.message(Command("help"))
-async def cmd_help(message: TgMessage, settings: Settings) -> None:
-    await message.answer(
-        texts.HELP.format(
-            max_voice=settings.max_voice_seconds,
-            msg_limit=settings.daily_msg_limit,
-            tts_limit=settings.daily_tts_limit,
-        )
+async def cmd_help(message: TgMessage, user: User, settings: Settings) -> None:
+    limits = limits_for(user, settings)
+    text = texts.HELP.format(
+        max_voice=settings.max_voice_seconds, msg_limit=limits.messages, tts_limit=limits.tts
     )
+    if is_premium(user):
+        text += "\n" + texts.PREMIUM_ACTIVE.format(until=f"{user.premium_until:%d.%m.%Y}")
+    await message.answer(text)
 
 
 @router.message(Command("mode"))
@@ -87,9 +88,33 @@ async def cmd_reset(
     await message.answer(texts.RESET_DONE)
     # Новая тема — это LLM-вызов, поэтому уважаем дневной лимит.
     if await dialog.messages_left(session, user) <= 0:
-        await message.answer(texts.LIMIT_REACHED.format(limit=settings.daily_msg_limit))
+        limit = limits_for(user, settings).messages
+        await message.answer(texts.LIMIT_REACHED.format(limit=limit))
         return
     await send_opener(bot, message.chat.id, session, user, dialog, reason="reset")
+
+
+@router.message(Command("app"))
+async def cmd_app(message: TgMessage, settings: Settings) -> None:
+    if not settings.webapp_url:
+        await message.answer(texts.APP_NOT_CONFIGURED)
+        return
+    await message.answer(
+        texts.APP_TEXT, reply_markup=webapp_kb(settings.webapp_url, texts.APP_BUTTON)
+    )
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: TgMessage, settings: Settings) -> None:
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer(texts.ADMIN_ONLY)
+        return
+    if not settings.webapp_url:
+        await message.answer(texts.APP_NOT_CONFIGURED)
+        return
+    await message.answer(
+        texts.ADMIN_TEXT, reply_markup=webapp_kb(settings.webapp_url, texts.ADMIN_BUTTON, "admin")
+    )
 
 
 @router.message(Command("stats"))

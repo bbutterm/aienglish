@@ -2,7 +2,7 @@
 
 import itertools
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -342,3 +342,57 @@ async def test_unknown_command_and_unsupported_content(harness: Harness) -> None
     await onboard(h)
     await h.feed(sticker=None, location={"latitude": 1.0, "longitude": 2.0})
     assert h.sent_texts() == [texts.UNSUPPORTED]
+
+
+async def test_app_and_admin_commands(harness: Harness, settings) -> None:
+    h = harness
+    await h.feed(text="/app")
+    assert h.sent_texts() == [texts.APP_NOT_CONFIGURED]
+
+    settings.webapp_url = "https://buddy.example"
+    await h.feed(text="/app")
+    button = h.tg.of_type(SendMessage)[0].reply_markup.inline_keyboard[0][0]
+    assert button.web_app.url == "https://buddy.example/"
+
+    await h.feed(text="/admin")
+    assert h.sent_texts() == [texts.ADMIN_ONLY]
+    settings.admin_ids = [USER_ID]
+    await h.feed(text="/admin")
+    button = h.tg.of_type(SendMessage)[0].reply_markup.inline_keyboard[0][0]
+    assert button.web_app.url == "https://buddy.example/?page=admin"
+
+
+async def test_onboarding_offers_mini_app(harness: Harness, settings) -> None:
+    settings.webapp_url = "https://buddy.example"
+    await onboard(harness)
+    done = next(m for m in harness.tg.of_type(SendMessage) if m.text.startswith("Готово"))
+    assert done.reply_markup.inline_keyboard[0][0].web_app.url == "https://buddy.example/"
+
+
+async def test_blocked_user_is_ignored(harness: Harness) -> None:
+    h = harness
+    await onboard(h)
+    async with h.session_factory() as session:
+        user = await session.get(User, USER_ID)
+        user.blocked = True
+        await session.commit()
+    await h.feed(text="Hello?")
+    await h.feed(text="/help")
+    assert h.tg.requests == []
+
+
+async def test_premium_raises_daily_limit(harness: Harness, settings, fake_apis) -> None:
+    h = harness
+    settings.daily_msg_limit = 1
+    settings.premium_daily_msg_limit = 5
+    await onboard(h)
+    async with h.session_factory() as session:
+        user = await session.get(User, USER_ID)
+        user.premium_until = datetime.now(UTC) + timedelta(days=3)
+        await session.commit()
+    await h.feed(text="first")
+    await h.feed(text="second")
+    assert h.sent_texts() == [fake_apis.companion_reply]
+    await h.feed(text="/help")
+    assert "⭐ Премиум активен до" in h.sent_texts()[0]
+    assert "5 реплик" in h.sent_texts()[0]

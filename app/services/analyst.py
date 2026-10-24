@@ -1,10 +1,10 @@
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 
 from app.config import Settings
 from app.db.repo import MistakeItem, VocabItem
+from app.llm.jsonutil import extract_json_object
 from app.llm.openrouter import LLMResult, OpenRouterClient
 from app.prompts import render
 
@@ -23,8 +23,6 @@ MISTAKE_TYPES = {
 LEVELS = {"A1", "A2", "B1", "B2", "C1", "C2"}
 MAX_MISTAKES = 5
 MAX_VOCAB = 3
-
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
 @dataclass
@@ -49,13 +47,7 @@ def _clean_str(value: object, limit: int = 300) -> str | None:
 
 def parse_analysis(raw: str) -> Analysis:
     """Терпимый к мусору разбор JSON аналитика: невалидные элементы отбрасываются."""
-    text = _FENCE_RE.sub("", raw.strip())
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("no JSON object in analyst response")
-    data = json.loads(text[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("analyst response is not an object")
+    data = extract_json_object(raw)
 
     analysis = Analysis()
     for item in data.get("mistakes") or []:

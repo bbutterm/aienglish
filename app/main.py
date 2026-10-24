@@ -6,9 +6,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.bot import texts
 from app.bot.handlers import build_router
 from app.bot.middlewares import DbSessionMiddleware, UserMiddleware
 from app.config import Settings, get_settings
@@ -29,6 +30,7 @@ BOT_COMMANDS = [
     BotCommand(command="mistakes", description="Последние ошибки"),
     BotCommand(command="review", description="Разбор ошибок"),
     BotCommand(command="reset", description="Новая тема"),
+    BotCommand(command="app", description="Уроки и прогресс"),
     BotCommand(command="help", description="Как это работает"),
     BotCommand(command="start", description="Настроить заново"),
 ]
@@ -42,18 +44,22 @@ def setup_logging(level: str) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def build_llm(settings: Settings, http: httpx.AsyncClient) -> OpenRouterClient:
+    return OpenRouterClient(
+        http,
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        timeout=settings.llm_timeout_seconds,
+    )
+
+
 def build_dialog(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     http: httpx.AsyncClient,
     tasks: BackgroundTasks,
 ) -> DialogService:
-    llm = OpenRouterClient(
-        http,
-        api_key=settings.openrouter_api_key,
-        base_url=settings.openrouter_base_url,
-        timeout=settings.llm_timeout_seconds,
-    )
+    llm = build_llm(settings, http)
     return DialogService(
         settings=settings,
         session_factory=session_factory,
@@ -94,6 +100,13 @@ async def run(settings: Settings) -> None:
         # getUpdates не работает, пока у бота висит webhook (например, от прошлого хостинга).
         await bot.delete_webhook()
         await bot.set_my_commands(BOT_COMMANDS)
+        if settings.webapp_url:
+            # Кнопка «Уроки» слева от поля ввода открывает Mini App.
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text=texts.APP_MENU_BUTTON, web_app=WebAppInfo(url=settings.webapp_url)
+                )
+            )
         logger.info("Starting long polling")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:

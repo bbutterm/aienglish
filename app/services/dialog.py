@@ -19,8 +19,9 @@ from app.db import repo
 from app.db.models import Message, User
 from app.personas import get_persona
 from app.services.analyst import Analyst
-from app.services.companion import Companion
+from app.services.companion import Companion, OpenerReason
 from app.services.memory import Memory
+from app.services.plans import limits_for
 from app.services.stt import SpeechToText
 from app.services.tts import TextToSpeech, TTSError, prepare_tts_text
 from app.services.usage import record_llm, record_usage, stt_cost, tts_cost
@@ -95,7 +96,7 @@ class DialogService:
     async def messages_left(self, session: AsyncSession, user: User) -> int:
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_user_messages_since(session, user.id, since)
-        return self.settings.daily_msg_limit - used
+        return limits_for(user, self.settings).messages - used
 
     # --- диалог ---
 
@@ -149,10 +150,14 @@ class DialogService:
         return Turn(reply=assistant, analysis=analysis)
 
     async def opener(
-        self, session: AsyncSession, user: User, reason: Literal["onboarding", "reset"]
+        self,
+        session: AsyncSession,
+        user: User,
+        reason: OpenerReason,
+        topic: str | None = None,
     ) -> Message:
         summary, history = await self.memory.context(session, user)
-        reply = await self.companion.opener(user, history, summary, reason=reason)
+        reply = await self.companion.opener(user, history, summary, reason=reason, topic=topic)
         message = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=reply.text
         )
@@ -234,7 +239,7 @@ class DialogService:
 
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_usage_since(session, user.id, "tts", since)
-        if used >= self.settings.daily_tts_limit:
+        if used >= limits_for(user, self.settings).tts:
             if notify_limit:
                 key = (user.id, since.date())
                 if key not in self._tts_limit_notified:

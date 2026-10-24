@@ -15,6 +15,7 @@ from app.bot.keyboards import tts_kb
 from app.db import repo
 from app.db.models import Message, User
 from app.llm.openrouter import LLMError
+from app.services.companion import OpenerReason
 from app.services.dialog import DialogService, SpeakStatus
 from app.services.review import build_review
 
@@ -112,11 +113,12 @@ async def send_opener(
     session: AsyncSession,
     user: User,
     dialog: DialogService,
-    reason: Literal["onboarding", "reset"],
+    reason: OpenerReason,
+    topic: str | None = None,
 ) -> None:
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=chat_id):
-            reply = await dialog.opener(session, user, reason)
+            reply = await dialog.opener(session, user, reason, topic)
     except LLMError:
         logger.exception("Opener failed for user %s", user.id)
         reply = await repo.add_message(

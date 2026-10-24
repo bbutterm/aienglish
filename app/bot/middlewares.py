@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bot import texts
 from app.bot.onboarding import start_onboarding
 from app.db import repo
+from app.services.plans import limits_for
 
 Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
@@ -26,15 +27,18 @@ class DbSessionMiddleware(BaseMiddleware):
 
 
 class UserMiddleware(BaseMiddleware):
-    """Upsert пользователя по telegram id → data["user"]."""
+    """Upsert пользователя по telegram id → data["user"]; заблокированных дальше не пускаем."""
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         tg_user = data.get("event_from_user")
         if tg_user is None or tg_user.is_bot:
             return None
-        data["user"] = await repo.upsert_user(
+        user = await repo.upsert_user(
             data["session"], tg_user.id, tg_user.username, tg_user.first_name
         )
+        if user.blocked:
+            return None  # заблокированных админом молча игнорируем
+        data["user"] = user
         return await handler(event, data)
 
 
@@ -49,6 +53,7 @@ class DialogGateMiddleware(BaseMiddleware):
             await start_onboarding(event, data["state"], user)
             return None
         if await data["dialog"].messages_left(data["session"], user) <= 0:
-            await event.answer(texts.LIMIT_REACHED.format(limit=data["settings"].daily_msg_limit))
+            limit = limits_for(user, data["settings"]).messages
+            await event.answer(texts.LIMIT_REACHED.format(limit=limit))
             return None
         return await handler(event, data)

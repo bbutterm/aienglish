@@ -1,5 +1,6 @@
 from datetime import datetime, time
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     REAL,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     SmallInteger,
     Text,
@@ -18,6 +20,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -28,6 +31,7 @@ class Base(DeclarativeBase):
         bool: Boolean(),
         datetime: DateTime(timezone=True),
         time: Time(),
+        dict[str, Any]: JSONB(),
     }
 
 
@@ -49,6 +53,8 @@ class User(Base):
     # Сообщения с id <= context_start_id уже свёрнуты в саммари (или отброшены через /reset).
     context_start_id: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     onboarded: Mapped[bool] = mapped_column(default=False, server_default=false())
+    premium_until: Mapped[datetime | None]  # премиум активен, пока это время в будущем
+    blocked: Mapped[bool] = mapped_column(default=False, server_default=false())
     last_review_at: Mapped[datetime | None]
     streak_days: Mapped[int] = mapped_column(default=0, server_default="0")
     last_active_at: Mapped[datetime | None]
@@ -105,6 +111,8 @@ class Vocab(Base):
     source: Mapped[str | None]  # bot|user|photo
     status: Mapped[str] = mapped_column(default="new", server_default="new")
     ease: Mapped[float] = mapped_column(REAL, default=2.5, server_default="2.5")
+    interval_days: Mapped[float] = mapped_column(REAL, default=0, server_default="0")
+    reps: Mapped[int] = mapped_column(default=0, server_default="0")
     next_review_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -124,4 +132,31 @@ class Usage(Base):
     audio_seconds: Mapped[float | None] = mapped_column(REAL)
     chars: Mapped[int | None]
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Lesson(Base):
+    __tablename__ = "lessons"
+    __table_args__ = (Index("ix_lessons_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    payload: Mapped[dict[str, Any]]  # упражнения с ответами — клиенту отдаётся без них
+    # {"<номер упражнения>": {"choice": int, "correct": bool}}
+    answers: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(default="new", server_default="new")  # new|done
+    score: Mapped[int | None] = mapped_column(SmallInteger)
+    total: Mapped[int | None] = mapped_column(SmallInteger)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+
+
+class AudioCache(Base):
+    """Озвучка для аудирования в уроках; ключ — хэш текста, голоса и формата."""
+
+    __tablename__ = "audio_cache"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    mime: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

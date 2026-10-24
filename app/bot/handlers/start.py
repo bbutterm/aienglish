@@ -9,8 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.handlers.common import edit_callback_text, send_opener
-from app.bot.keyboards import LevelCb, OnboardCb, PersonaCb, levels_kb, personas_kb, restart_kb
+from app.bot.keyboards import (
+    LevelCb,
+    OnboardCb,
+    PersonaCb,
+    levels_kb,
+    personas_kb,
+    restart_kb,
+    webapp_kb,
+)
 from app.bot.onboarding import Onboarding, start_onboarding
+from app.config import Settings
 from app.db.models import User
 from app.personas import PERSONAS
 from app.services.dialog import DialogService
@@ -118,7 +127,11 @@ async def on_persona(
     await edit_callback_text(
         callback, texts.PERSONA_CHOSEN.format(flag=persona.flag, name=persona.name)
     )
-    await callback.message.answer(texts.ONBOARDING_DONE.format(name=persona.name))
+    settings: Settings = dialog.settings
+    markup = webapp_kb(settings.webapp_url, texts.APP_BUTTON) if settings.webapp_url else None
+    await callback.message.answer(
+        texts.ONBOARDING_DONE.format(name=persona.name), reply_markup=markup
+    )
     await send_opener(bot, callback.message.chat.id, session, user, dialog, reason="onboarding")
 
 

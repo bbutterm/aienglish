@@ -1,8 +1,12 @@
+import hashlib
+import hmac
 import json
 import os
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -53,7 +57,10 @@ async def engine() -> AsyncGenerator[AsyncEngine]:
 async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE users, messages, mistakes, vocab, usage RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE users, messages, mistakes, vocab, usage, lessons, audio_cache "
+                "RESTART IDENTITY CASCADE"
+            )
         )
     return create_session_factory(engine)
 
@@ -89,11 +96,14 @@ class FakeAPIs:
         self.tts_requests: list[dict[str, Any]] = []
         self.companion_reply = "That sounds fun! What did you watch?"
         self.stt_text = "I go to cinema yesterday"
+        self.lesson_mode = "ok"  # ok | garbage | error
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "openrouter.ai":
             body = json.loads(request.content)
             self.llm_requests.append(body)
+            if self.lesson_mode == "error" and is_lesson_request(body):
+                return httpx.Response(400, json={"error": {"message": "bad request"}})
             return httpx.Response(200, json=openrouter_response(self._llm(body), body["model"]))
         if request.url.path == "/v1/speech-to-text":
             self.stt_requests.append(request)
@@ -111,6 +121,10 @@ class FakeAPIs:
 
     def _llm(self, body: dict[str, Any]) -> str:
         system = body["messages"][0]["content"]
+        if is_lesson_request(body):
+            if self.lesson_mode == "garbage":
+                return "Sorry, here is no JSON"
+            return json.dumps(fake_lesson(json.loads(body["messages"][1]["content"])))
         if body.get("response_format"):
             learner = body["messages"][-1]["content"]
             mistakes = []
@@ -148,6 +162,62 @@ class FakeAPIs:
             if not r.get("response_format")
             and not r["messages"][0]["content"].startswith("You maintain the running memory")
         ]
+
+    def lesson_requests(self) -> list[dict[str, Any]]:
+        return [r for r in self.llm_requests if is_lesson_request(r)]
+
+
+def is_lesson_request(body: dict[str, Any]) -> bool:
+    return body["messages"][0]["content"].startswith("You create a short daily English lesson")
+
+
+def fake_lesson(material: dict[str, Any]) -> dict[str, Any]:
+    exercises: list[dict[str, Any]] = [
+        {
+            "type": "fix",
+            "mistake_id": m["id"],
+            "options": [m["corrected"], m["original"], "I goes to cinema"],
+            "answer": 0,
+            "explanation_ru": "Прошедшее время",
+        }
+        for m in material["mistakes"]
+    ]
+    exercises += [
+        {
+            "type": "gap",
+            "sentence": "Yesterday I ___ a film.",
+            "options": ["watch", "watched", "watching"],
+            "answer": 1,
+            "explanation_ru": "Вчера — значит Past Simple",
+        },
+        {
+            "type": "translate",
+            "ru": "Я смотрел фильм",
+            "options": ["I watched a film", "I watch a film", "I am watch film"],
+            "answer": 0,
+            "explanation_ru": "Прошедшее время",
+        },
+        {
+            "type": "listen",
+            "text": "We went to the cinema last night",
+            "options": ["We went to the cinema last night", "We want to the cinema", "We wend"],
+            "answer": 0,
+        },
+    ]
+    return {
+        "title": "Что было вчера",
+        "topic": "Favourite films",
+        "intro_ru": "Повторим прошедшее время.",
+        "exercises": exercises,
+        "cards": [
+            {"vocab_id": w["id"], "example": f"A {w['term']} example."} for w in material["words"]
+        ],
+        "insights": {
+            "strengths": ["Смело говоришь"],
+            "weaknesses": ["Путаешь времена"],
+            "tip_ru": "Рассказывай про вчерашний день",
+        },
+    }
 
 
 @pytest.fixture
@@ -206,3 +276,19 @@ class FakeTelegramSession(BaseSession):
 
     def of_type[T](self, method_type: type[T]) -> list[T]:
         return [r for r in self.requests if isinstance(r, method_type)]
+
+
+def sign_init_data(
+    bot_token: str, user_id: int, *, auth_date: int | None = None, **user_fields: Any
+) -> str:
+    """initData, подписанный так же, как это делает Telegram."""
+    user = {"id": user_id, "first_name": "Alex", "username": "alex", **user_fields}
+    data = {
+        "query_id": "AAHtest",
+        "user": json.dumps(user, separators=(",", ":")),
+        "auth_date": str(auth_date or int(time.time())),
+    }
+    check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    data["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(data)

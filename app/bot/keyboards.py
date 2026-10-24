@@ -1,5 +1,5 @@
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot import texts
@@ -30,6 +30,14 @@ class ModeCb(CallbackData, prefix="mode"):
 
 class VoiceCb(CallbackData, prefix="voice"):
     action: str  # toggle
+
+
+def webapp_kb(url: str, text: str, page: str | None = None) -> InlineKeyboardMarkup:
+    # Раздел передаём через ?page=: hash Telegram занимает своими параметрами запуска.
+    target = f"{url.rstrip('/')}/" + (f"?page={page}" if page else "")
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=text, web_app=WebAppInfo(url=target))]]
+    )
 
 
 def tts_kb(message_id: int) -> InlineKeyboardMarkup:
