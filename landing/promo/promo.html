@@ -327,7 +327,7 @@ const W = 1080, H = FORMAT === 'square' ? 1080 : 1920;
 // Раскладка по форматам. Мир (чат, карточки) нарисован в координатах 1080×1920;
 // для квадрата он масштабируется вокруг точки (540, 1140).
 const L = FORMAT === 'square' ? {
-  S: 0.72, cx: 540, cy: 706, kCard: 1.0, kFeat: 1.1, featUp: 40,
+  S: 0.72, cx: 540, cy: 700, kCard: 0.9, kFeat: 1.1, featUp: 40,
   cap: { x: 72, y: 50, w: 936, size: 74, lh: 1.08 },
   capFadeH: 300,
   hook: { x: 72, y: 96, w: 936, size: 118, lh: 1.04, perLine: true },
@@ -441,7 +441,7 @@ function makeCap(lines, tin, tout, place) {
 
 /* ================= Титры и сцены ================= */
 const T = {
-  hookIn: 0.1, strike: [2.0, 2.35], hookMark: [2.4, 2.8], hookOut: 2.9,
+  hookIn: 0.0, strike: [2.0, 2.35], hookMark: [2.4, 2.8], hookOut: 2.9,
   chatIn: [3.02, 3.6],
   m1: 3.7, rec: [4.1, 5.45], m2: 5.5, tx: [5.75, 6.75], stRec: [6.75, 7.35], m3: 7.35, m3play: [7.6, 9.1],
   noticed: [8.85, 9.25], stTyping: [9.2, 9.6], m4: 9.6, m4strike: [10.05, 10.45], m4mark: [10.5, 10.95], m4rule: 11.0,
@@ -449,9 +449,9 @@ const T = {
   chatOut: [12.3, 13.3], lessonIn: [12.45, 13.45],
   lesson: { e1s: [13.25, 13.6], e1r: 13.9, ph: [12.95, 13.15, 13.35], e2: 14.4, e2s: [14.65, 15.0], e2f: [15.05, 15.45], btn: 15.6 },
   whip1: [17.35, 17.85], pod: { play: [17.8, 19.8], s2: 18.75 },
-  whip2: [19.75, 20.25], boost: { s: [20.45, 20.85], b2: 20.9, mk: [21.05, 21.45], chips: [21.25, 21.45, 21.65] },
-  boostOut: [21.95, 22.4],
-  end: { line: [22.15, 22.85], mark: [22.7, 23.0], word: [22.85, 23.5], head: 23.35, cta: 24.05, small: 24.45 },
+  whip2: [19.75, 20.25], boost: { s: [20.4, 20.75], b2: 20.8, mk: [20.95, 21.3], chips: [21.1, 21.22, 21.34] },
+  boostOut: [22.2, 22.6],
+  end: { line: [22.4, 23.1], mark: [22.95, 23.25], word: [23.1, 23.75], head: 23.6, cta: 24.3, small: 24.7 },
 };
 
 const C = {
@@ -461,7 +461,7 @@ const C = {
   c: makeCap([['Ошибся?'], [['Друг', { at: 10.3 }], ['поправит', { mark: true, at: 10.38 }]]], 9.2, 12.15),
   d: makeCap([['Урок', 'из', ['твоего', { mark: true }]], [['же', { mark: true }], 'разговора']], 12.75, 17.3),
   e: makeCap([['Подкаст'], [['про', { mark: true }], ['тебя', { mark: true }]]], 17.65, 19.7),
-  f: makeCap([['Прокачка'], [['слов', { mark: true }]]], 20.05, 21.9),
+  f: makeCap([['Прокачка'], [['слов', { mark: true }]]], 20.05, 22.15),
 };
 
 // финальная плашка
@@ -538,7 +538,7 @@ function camera(t) {
     [17.85, [540, CARD_Y.pod + L.featUp, L.kFeat, 0, 3, 0]],
     [19.75, [540, CARD_Y.pod + L.featUp - 10, L.kFeat * 1.03, 0, 4, 0]],
     [20.25, [540, CARD_Y.boost + L.featUp, L.kFeat, 0, -3, 0]],
-    [22.0, [540, CARD_Y.boost + L.featUp - 10, L.kFeat * 1.04, 1, -3, 0]],
+    [22.25, [540, CARD_Y.boost + L.featUp - 10, L.kFeat * 1.04, 1, -3, 0]],
     [27, [540, CARD_Y.boost + L.featUp, 1.0, 0, 0, 0]],
   ]);
   [fx, fy, k, rx, ry, rz] = base;
@@ -600,7 +600,7 @@ function renderAt(t) {
     const dx = -(cam.fx - 540) * f * S - cam.ry * 14 * f, dy = -(cam.fy - 1140) * f * S + cam.rx * 14 * f;
     const sc = 1 + (cam.k - 1) * f;
     el.style.transform = `translate(${d.x + dx + (d.x - W / 2) * (sc - 1)}px, ${d.y + dy + (d.y - H / 2) * (sc - 1)}px) rotate(${cam.rz * f}deg) scale(${sc})`;
-    el.style.opacity = 1 - prog(t, 21.9, 22.4) * .6;
+    el.style.opacity = 1 - prog(t, 22.15, 22.65) * .6;
   });
 
   /* ---------- 1. Хук ---------- */
@@ -811,7 +811,7 @@ function renderAt(t) {
       }
     });
   });
-  $('#capfade').style.opacity = clamp(prog(t, 3.4, 3.8)) * (1 - prog(t, 21.9, 22.3));
+  $('#capfade').style.opacity = clamp(prog(t, 3.4, 3.8)) * (1 - prog(t, 22.15, 22.55));
 
   /* ---------- 6. Финал ---------- */
   const end = $('#end');
