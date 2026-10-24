@@ -226,3 +226,19 @@ class Podcast(Base):
     mime: Mapped[str | None]
     chars: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Payment(Base):
+    """Оплата звёздами Telegram; charge id — для возвратов и защиты от повторной обработки."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    plan: Mapped[str]  # month|quarter|year
+    currency: Mapped[str]  # XTR
+    amount: Mapped[int]
+    charge_id: Mapped[str] = mapped_column(unique=True)
+    recurring: Mapped[bool] = mapped_column(default=False, server_default=false())
+    premium_until: Mapped[datetime | None]  # до какого числа продлил
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

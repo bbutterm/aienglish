@@ -109,7 +109,11 @@ function renderHome(view, ctx, today) {
       "div",
       { class: "chips" },
       h("span", { class: "badge outline" }, me.level),
-      me.premium ? h("span", { class: "badge accent" }, "Премиум") : null,
+      me.premium
+        ? h("span", { class: "badge accent" }, "Премиум")
+        : me.features?.payments_stars
+          ? h("button", { class: "badge accent", type: "button", style: { border: "0", cursor: "pointer", font: "inherit", fontSize: "12px", fontWeight: "600" }, onclick: () => ctx.navigate("#/premium") }, "Премиум")
+          : null,
     ),
   );
   if (!me.onboarded) {

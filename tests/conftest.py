@@ -12,7 +12,15 @@ import httpx
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import EditMessageText, GetFile, GetMe, SendAudio, SendMessage, SendVoice
+from aiogram.methods import (
+    CreateInvoiceLink,
+    EditMessageText,
+    GetFile,
+    GetMe,
+    SendAudio,
+    SendMessage,
+    SendVoice,
+)
 from aiogram.methods.base import TelegramMethod
 from aiogram.types import Chat, File, Message, User, Voice
 from sqlalchemy import text
@@ -59,7 +67,7 @@ async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessio
         await conn.execute(
             text(
                 "TRUNCATE users, messages, mistakes, vocab, usage, lessons, audio_cache, "
-                "feature_flags, topic_ideas, podcasts RESTART IDENTITY CASCADE"
+                "feature_flags, topic_ideas, podcasts, payments RESTART IDENTITY CASCADE"
             )
         )
     return create_session_factory(engine)
@@ -390,6 +398,8 @@ class FakeTelegramSession(BaseSession):
             return Message(**fields)
         if isinstance(method, GetFile):
             return File(file_id=method.file_id, file_unique_id="u", file_path="voice/file.oga")
+        if isinstance(method, CreateInvoiceLink):
+            return f"https://t.me/$invoice-{method.payload.replace(':', '-')}"
         if isinstance(method, GetMe):
             return User(id=123456, is_bot=True, first_name="Buddy", username="buddy_test_bot")
         return True

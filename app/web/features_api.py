@@ -14,8 +14,9 @@ from app.bot.after_turn import start_mission, start_talk
 from app.db.models import Podcast, TopicIdea, User
 from app.features import FEATURES
 from app.services import admin as admin_service
-from app.services import journey
+from app.services import journey, payments
 from app.services.ideas import IdeaError, idea_view
+from app.services.plans import is_premium
 from app.services.podcast import PodcastError, podcast_view
 from app.web.deps import AdminDep, SessionDep, StateDep, UserDep, WebState, api_error
 
@@ -214,6 +215,39 @@ async def referral(user: UserDep, state: StateDep, session: SessionDep) -> dict[
     }
 
 
+# --- премиум за звёзды ---
+
+
+@router.get("/premium")
+async def premium(user: UserDep, state: StateDep) -> dict[str, Any]:
+    await require(state, "payments_stars")
+    return {
+        "premium": is_premium(user),
+        "premium_until": user.premium_until.isoformat() if user.premium_until else None,
+        "plans": [
+            {
+                "key": p.key,
+                "title": p.title,
+                "description": p.description,
+                "days": p.days,
+                "subscription": p.subscription,
+                "stars": p.stars(state.settings),
+            }
+            for p in payments.PLANS.values()
+        ],
+    }
+
+
+@router.post("/premium/{plan_key}/invoice")
+async def premium_invoice(plan_key: str, user: UserDep, state: StateDep) -> dict[str, Any]:
+    """Ссылка на счёт в звёздах — Mini App открывает её через Telegram.WebApp.openInvoice."""
+    await require(state, "payments_stars")
+    plan = payments.PLANS.get(plan_key)
+    if plan is None:
+        raise api_error(404, "not_found", "Нет такого тарифа.")
+    return {"link": await payments.invoice_link(state.bot, state.settings, user.id, plan)}
+
+
 # --- админка: фичи и источники ---
 
 
@@ -253,4 +287,8 @@ async def admin_feature(key: str, body: FeatureIn, _: AdminDep, state: StateDep)
 async def admin_sources(
     _: AdminDep, session: SessionDep, days: Annotated[int, Query(ge=1, le=365)] = 30
 ) -> dict[str, Any]:
-    return {"days": days, "sources": await admin_service.sources(session, days)}
+    return {
+        "days": days,
+        "sources": await admin_service.sources(session, days),
+        "payments": await admin_service.payments_summary(session, days),
+    }

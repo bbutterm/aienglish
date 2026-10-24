@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     lesson_reasoning_effort: str = "low"
     daily_lesson_limit: int = 1
     premium_daily_lesson_limit: int = 3
+
+    # Оплата звёздами Telegram (фича payments_stars): цены в звёздах
+    stars_month: int = 350  # подписка на 30 дней, продлевается сама
+    stars_quarter: int = 900  # пропуск на 90 дней без автопродления
+    stars_year: int = 2400  # год, разово
     # Аудирование в уроках играет браузер Telegram: mp3 поддерживается везде, в отличие от Ogg/Opus
     lesson_audio_format: str = "mp3_44100_64"
 

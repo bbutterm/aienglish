@@ -139,7 +139,8 @@ async def test_admin_features_and_sources(web: Web, session_factory) -> None:
     assert (await web.get("/api/admin/features")).status_code == 403
     features = (await web.get("/api/admin/features", user_id=ADMIN_ID)).json()["features"]
     assert [f["key"] for f in features] == list(FEATURES)
-    assert all(f["enabled"] for f in features)
+    # по умолчанию всё включено, кроме того, что стоит денег или меняет оплату
+    assert {f["key"] for f in features if not f["enabled"]} == {"payments_stars", "trial_week"}
 
     response = await web.post(
         "/api/admin/features/podcast", user_id=ADMIN_ID, json={"enabled": False}

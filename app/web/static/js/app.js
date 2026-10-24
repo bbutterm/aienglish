@@ -6,6 +6,7 @@ import { errorCard, h, loadingCard, mount, tg } from "./ui.js";
 import { renderAdmin } from "./views/admin.js";
 import { renderLessonTab } from "./views/lesson.js";
 import { renderPodcast } from "./views/podcast.js";
+import { renderPremium } from "./views/premium.js";
 import { renderProgress } from "./views/progress.js";
 import { renderTopics } from "./views/topics.js";
 import { renderWords } from "./views/words.js";
@@ -69,6 +70,7 @@ function parseRoute() {
   if (topic) return { name: "topics", params: { ideaId: Number(topic[1]) } };
   if (hash === "#/topics") return { name: "topics" };
   if (hash === "#/podcast") return { name: "podcast" };
+  if (hash === "#/premium") return { name: "premium" };
   if (hash === "#/progress") return { name: "progress" };
   if (hash === "#/words") return { name: "words" };
   if (hash === "#/admin") return { name: "admin" };
@@ -99,7 +101,7 @@ async function route_() {
   ctx.setBack(null);
   const { name, params } = parseRoute();
   renderTabs(
-    { lesson: "#/", topics: "#/topics", podcast: "#/", progress: "#/progress", words: "#/words", admin: "#/admin" }[name],
+    { lesson: "#/", topics: "#/topics", podcast: "#/", premium: "#/", progress: "#/progress", words: "#/words", admin: "#/admin" }[name],
   );
   ctx.setTabsVisible(true);
   window.scrollTo({ top: 0 });
@@ -107,6 +109,7 @@ async function route_() {
     if (name === "progress") await renderProgress(view, ctx);
     else if (name === "topics") await renderTopics(view, ctx, params);
     else if (name === "podcast") await renderPodcast(view, ctx);
+    else if (name === "premium") await renderPremium(view, ctx);
     else if (name === "words") await renderWords(view, ctx);
     else if (name === "admin") await renderAdmin(view, ctx, params);
     else await renderLessonTab(view, ctx);

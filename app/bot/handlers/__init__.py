@@ -10,6 +10,7 @@ from app.bot.handlers import (
     commands,
     fallback,
     forward,
+    payments,
     photo,
     settings,
     start,
@@ -27,6 +28,7 @@ def build_router() -> Router:
     root.include_routers(
         start.router,
         commands.router,
+        payments.router,
         settings.router,
         callbacks.router,
         forward.router,

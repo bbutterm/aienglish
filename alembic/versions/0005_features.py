@@ -1,4 +1,4 @@
-"""feature flags, word upgrades, topic ideas and missions, podcast, referrals, friend pings
+"""feature flags, word upgrades, topic ideas and missions, podcast, referrals, pings, payments
 
 Revision ID: 0005
 Revises: 0004
@@ -101,9 +101,30 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_podcasts_user_created", "podcasts", ["user_id", "created_at"])
+    op.create_table(
+        "payments",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("user_id", sa.BigInteger(), nullable=False),
+        sa.Column("plan", sa.Text(), nullable=False),
+        sa.Column("currency", sa.Text(), nullable=False),
+        sa.Column("amount", sa.Integer(), nullable=False),
+        sa.Column("charge_id", sa.Text(), nullable=False),
+        sa.Column("recurring", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column("premium_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("charge_id"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_table("payments")
     op.drop_index("ix_podcasts_user_created", table_name="podcasts")
     op.drop_table("podcasts")
     op.drop_index("ix_topic_ideas_user_created", table_name="topic_ideas")

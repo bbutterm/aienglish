@@ -54,6 +54,8 @@ export const api = {
   podcastAudio: (id) => request("GET", `/api/podcasts/${id}/audio`, undefined, { raw: true }),
   sendPodcast: (id) => request("POST", `/api/podcasts/${id}/send`),
   referral: () => request("GET", "/api/referral"),
+  premium: () => request("GET", "/api/premium"),
+  premiumInvoice: (plan) => request("POST", `/api/premium/${plan}/invoice`),
   admin: {
     overview: (days = 14) => request("GET", `/api/admin/overview?days=${days}`),
     users: (q = "", offset = 0) =>

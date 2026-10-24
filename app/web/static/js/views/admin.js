@@ -232,7 +232,16 @@ function sourcesSection() {
         box.replaceChildren(card(h("p", { class: "muted small" }, "Новых пользователей за 30 дней нет.")));
         return;
       }
+      const paid = data.payments.reduce((acc, p) => acc + p.stars, 0);
       box.replaceChildren(
+        data.payments.length
+          ? h(
+              "div",
+              { class: "tiles", style: { marginBottom: "12px" } },
+              statTile({ label: "Оплаты за 30 дней", value: `${formatNumber(paid)} ⭐`, delta: { text: `≈ $${(paid * 0.013).toFixed(0)} к выводу` } }),
+              statTile({ label: "Покупок", value: formatNumber(data.payments.reduce((a, p) => a + p.count, 0)), delta: { text: data.payments.map((p) => `${p.plan}: ${p.count}`).join(" · ") } }),
+            )
+          : "",
         barList({
           title: "Новые пользователи по источникам",
           subtitle: "метка из ссылки t.me/бот?start=… · освоились — 5+ реплик",

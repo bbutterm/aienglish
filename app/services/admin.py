@@ -8,7 +8,7 @@ from sqlalchemy import Date, cast, distinct, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db.models import Lesson, Message, Mistake, Usage, User
+from app.db.models import Lesson, Message, Mistake, Payment, Usage, User
 from app.services.plans import is_premium, limits_for
 from app.services.progress import build_progress
 
@@ -300,3 +300,17 @@ async def sources(session: AsyncSession, days: int = 30, now: datetime | None = 
         {"source": source, "users": users, "activated": activated, "premium": premium}
         for source, users, activated, premium in rows
     ]
+
+
+async def payments_summary(
+    session: AsyncSession, days: int = 30, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Оплаты звёздами по тарифам за период."""
+    now = now or datetime.now(UTC)
+    rows = await session.execute(
+        select(Payment.plan, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.created_at >= now - timedelta(days=days))
+        .group_by(Payment.plan)
+        .order_by(func.sum(Payment.amount).desc())
+    )
+    return [{"plan": plan, "count": count, "stars": int(stars)} for plan, count, stars in rows]

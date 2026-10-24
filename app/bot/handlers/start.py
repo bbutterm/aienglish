@@ -14,6 +14,9 @@ from app.db.models import User
 from app.features import FeatureFlags
 from app.services import journey
 from app.services.dialog import DialogService
+from app.services.plans import extend_premium
+
+TRIAL_DAYS = 7
 
 router = Router(name="start")
 
@@ -39,6 +42,11 @@ async def cmd_start(
     # Ссылка с меткой (реклама, лендинг, приглашение друга) — запоминаем источник.
     invited = await journey.apply_start(session, user, journey.parse_start(command.args))
     prefix = texts.REFERRAL_WELCOME if invited and await features.enabled("referrals") else ""
+    if await features.enabled("trial_week") and user.premium_until is None:
+        # Пробная неделя: новичок сразу видит продукт целиком — живой голос, подкаст, сцены.
+        extend_premium(user, TRIAL_DAYS)
+        await session.commit()
+        prefix = texts.TRIAL_WELCOME + prefix
     # Без анкеты: приветствие и сразу первая реплика собеседника.
     await welcome(message, session, user, settings, prefix)
     await send_opener(bot, message.chat.id, session, user, dialog, reason="onboarding")

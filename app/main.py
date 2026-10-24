@@ -35,6 +35,7 @@ BOT_COMMANDS = [
     BotCommand(command="reset", description="Новая тема"),
     BotCommand(command="stop", description="Выйти из ролевой сцены"),
     BotCommand(command="app", description="Уроки и прогресс"),
+    BotCommand(command="premium", description="Премиум"),
     BotCommand(command="help", description="Как это работает"),
 ]
 
