@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 
 from app.config import Settings, get_settings
 from app.db.session import create_engine, create_session_factory
-from app.main import setup_logging
+from app.main import secrets_of, setup_logging
 from app.web.app import build_state, create_app
 
 
@@ -38,7 +38,7 @@ async def serve(settings: Settings) -> None:
 
 def main() -> None:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, secrets_of(settings))
     asyncio.run(serve(settings))
 
 

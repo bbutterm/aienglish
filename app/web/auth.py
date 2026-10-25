@@ -14,7 +14,7 @@ def parse_init_data(
 ) -> WebAppUser:
     try:
         data = safe_parse_webapp_init_data(bot_token, init_data)
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:  # TypeError: не-ASCII в hash (compare_digest)
         raise InitDataError("invalid signature") from exc
     if data.user is None:
         raise InitDataError("no user in init data")
