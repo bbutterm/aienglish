@@ -328,3 +328,38 @@ async def test_redelivered_payment_counts_once_in_parallel(session_factory, sett
     async with session_factory() as session:
         until = (await session.get(User, USER_ID)).premium_until
     assert round((until - datetime.now(UTC)) / timedelta(days=1)) == payments.PLANS["month"].days
+
+
+# --- учёт озвучки ---
+
+
+async def test_tts_is_billed_even_if_conversion_fails(
+    harness: Harness, fake_apis, monkeypatch
+) -> None:
+    import app.services.dialog as dialog_module
+    from app.services.tts import TTSError
+
+    async def broken_ffmpeg(audio: bytes) -> bytes:
+        raise TTSError("ffmpeg failed")
+
+    monkeypatch.setattr(dialog_module, "ensure_ogg_opus", broken_ffmpeg)
+    h = harness
+    await onboard(h)
+    await h.feed(voice=Voice(file_id="v", file_unique_id="u", duration=3))
+    assert len(fake_apis.tts_requests) == 1
+    assert await count(h, Usage, Usage.kind == "tts") == 1
+    assert any(fake_apis.companion_reply in (t or "") for t in h.sent_texts())
+
+
+async def test_parallel_lesson_audio_bills_every_synthesis(
+    web: Web, session_factory, fake_apis, delays
+) -> None:
+    await seed_user(session_factory)
+    lesson = (await web.post("/api/lessons")).json()
+    index = next(e["index"] for e in lesson["exercises"] if e["type"] == "listen")
+    delays.tts = 0.2
+    url = f"/api/lessons/{lesson['id']}/audio/{index}"
+    responses = await asyncio.gather(*(web.get(url) for _ in range(3)))
+    assert all(r.status_code == 200 for r in responses)
+    rows = await count(session_factory, Usage, Usage.kind == "tts_lesson")
+    assert rows == len(fake_apis.tts_requests)

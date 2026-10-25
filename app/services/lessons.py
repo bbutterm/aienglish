@@ -651,6 +651,7 @@ class LessonService:
             chars=len(text),
             cost_usd=tts_cost(len(text), self._settings),
         )
+        await session.commit()  # расход — до кэша: откат при гонке за кэш его не сотрёт
         session.add(AudioCache(key=key, content=content, mime=mime))
         try:
             await session.commit()

@@ -28,7 +28,7 @@ from app.services.missions import apply_goals, is_expired, pending_goals
 from app.services.plans import limits_for
 from app.services.rewrite import Rewriter
 from app.services.stt import SpeechToText
-from app.services.tts import TextToSpeech, TTSError, prepare_tts_text
+from app.services.tts import TextToSpeech, TTSError, ensure_ogg_opus, prepare_tts_text
 from app.services.usage import record_llm, record_usage, stt_cost, tts_cost
 
 logger = logging.getLogger(__name__)
@@ -339,18 +339,25 @@ class DialogService:
         voice_id = get_persona(user.persona).voice_id(self.settings)
         async with ChatActionSender.record_voice(bot=bot, chat_id=chat_id):
             try:
-                audio = await self.tts.synthesize(text, voice_id)
+                raw = await self.tts.synthesize_raw(text, voice_id)
             except TTSError:
                 logger.exception("TTS failed for message %s", message.id)
                 return SpeakStatus.FAILED
-        await record_usage(
-            session,
-            user_id=user.id,
-            kind="tts",
-            model=self.settings.tts_model,
-            chars=len(text),
-            cost_usd=tts_cost(len(text), self.settings),
-        )
+            # ElevenLabs уже взял деньги — учитываем сразу, даже если конвертация не удастся.
+            await record_usage(
+                session,
+                user_id=user.id,
+                kind="tts",
+                model=self.settings.tts_model,
+                chars=len(text),
+                cost_usd=tts_cost(len(text), self.settings),
+            )
+            await session.commit()
+            try:
+                audio = await ensure_ogg_opus(raw)
+            except TTSError:
+                logger.exception("Voice conversion failed for message %s", message.id)
+                return SpeakStatus.FAILED
         try:
             file = BufferedInputFile(audio, filename="reply.ogg")
             sent = await self._send_voice(bot, chat_id, file, caption, reply_markup)
