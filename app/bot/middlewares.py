@@ -53,6 +53,9 @@ class DialogGateMiddleware(BaseMiddleware):
             await welcome(event, data["session"], user, data["settings"])
         if await data["dialog"].messages_left(data["session"], user) <= 0:
             limit = limits_for(user, data["settings"]).messages
-            await event.answer(texts.LIMIT_REACHED.format(limit=limit))
+            text = texts.LIMIT_REACHED.format(limit=limit)
+            if await data["features"].enabled("payments_stars"):
+                text += texts.LIMIT_UPSELL
+            await event.answer(text)
             return None
         return await handler(event, data)

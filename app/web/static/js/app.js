@@ -1,20 +1,25 @@
 // Точка входа Mini App: тема Telegram, роутинг по hash, нижние вкладки.
 import { api } from "./api.js";
 import { hideTooltip } from "./charts.js";
+import { icon } from "./icons.js";
 import { errorCard, h, loadingCard, mount, tg } from "./ui.js";
 import { renderAdmin } from "./views/admin.js";
 import { renderLessonTab } from "./views/lesson.js";
+import { renderPodcast } from "./views/podcast.js";
+import { renderPremium } from "./views/premium.js";
 import { renderProgress } from "./views/progress.js";
+import { renderTopics } from "./views/topics.js";
 import { renderWords } from "./views/words.js";
 
 const view = document.getElementById("view");
 const tabs = document.getElementById("tabs");
 
 const TABS = [
-  { route: "#/", icon: "📚", label: "Урок" },
-  { route: "#/progress", icon: "📈", label: "Прогресс" },
-  { route: "#/words", icon: "🗂", label: "Слова" },
-  { route: "#/admin", icon: "🛠", label: "Админ", admin: true },
+  { route: "#/", icon: "chat", label: "Сегодня" },
+  { route: "#/topics", icon: "compass", label: "Темы", feature: "topic_ideas" },
+  { route: "#/progress", icon: "chart", label: "Прогресс" },
+  { route: "#/words", icon: "cards", label: "Слова" },
+  { route: "#/admin", icon: "sliders", label: "Админ", admin: true },
 ];
 
 let backHandler = null;
@@ -45,9 +50,13 @@ const ctx = {
 function applyTheme() {
   const scheme = tg?.colorScheme;
   if (scheme) document.documentElement.dataset.theme = scheme;
+  // Шапка Telegram — в цвет «бумаги» приложения, а не системного фона.
+  const paper = getComputedStyle(document.documentElement).getPropertyValue("--paper").trim();
   try {
-    tg?.setHeaderColor?.("secondary_bg_color");
-    tg?.setBackgroundColor?.("secondary_bg_color");
+    if (paper) {
+      tg?.setHeaderColor?.(paper);
+      tg?.setBackgroundColor?.(paper);
+    }
   } catch {
     /* старые клиенты Telegram */
   }
@@ -57,6 +66,11 @@ function parseRoute() {
   const hash = location.hash;
   const user = hash.match(/^#\/admin\/user\/(\d+)$/);
   if (user) return { name: "admin", params: { userId: Number(user[1]) } };
+  const topic = hash.match(/^#\/topics\/(\d+)$/);
+  if (topic) return { name: "topics", params: { ideaId: Number(topic[1]) } };
+  if (hash === "#/topics") return { name: "topics" };
+  if (hash === "#/podcast") return { name: "podcast" };
+  if (hash === "#/premium") return { name: "premium" };
   if (hash === "#/progress") return { name: "progress" };
   if (hash === "#/words") return { name: "words" };
   if (hash === "#/admin") return { name: "admin" };
@@ -64,7 +78,9 @@ function parseRoute() {
 }
 
 function renderTabs(active) {
-  const items = TABS.filter((tab) => !tab.admin || ctx.me?.is_admin);
+  const items = TABS.filter(
+    (tab) => (!tab.admin || ctx.me?.is_admin) && (!tab.feature || ctx.me?.features?.[tab.feature]),
+  );
   tabs.replaceChildren(
     ...items.map((tab) =>
       h(
@@ -73,7 +89,7 @@ function renderTabs(active) {
           href: tab.route,
           "aria-current": tab.route === active ? "page" : null,
         },
-        h("span", { class: "icon", "aria-hidden": "true" }, tab.icon),
+        h("span", { class: "tab-icon" }, icon(tab.icon)),
         tab.label,
       ),
     ),
@@ -84,11 +100,16 @@ async function route_() {
   hideTooltip();
   ctx.setBack(null);
   const { name, params } = parseRoute();
-  renderTabs({ lesson: "#/", progress: "#/progress", words: "#/words", admin: "#/admin" }[name]);
+  renderTabs(
+    { lesson: "#/", topics: "#/topics", podcast: "#/", premium: "#/", progress: "#/progress", words: "#/words", admin: "#/admin" }[name],
+  );
   ctx.setTabsVisible(true);
   window.scrollTo({ top: 0 });
   try {
     if (name === "progress") await renderProgress(view, ctx);
+    else if (name === "topics") await renderTopics(view, ctx, params);
+    else if (name === "podcast") await renderPodcast(view, ctx);
+    else if (name === "premium") await renderPremium(view, ctx);
     else if (name === "words") await renderWords(view, ctx);
     else if (name === "admin") await renderAdmin(view, ctx, params);
     else await renderLessonTab(view, ctx);
@@ -109,7 +130,7 @@ async function start() {
       h(
         "section",
         { class: "card empty" },
-        h("div", { class: "emoji" }, "📱"),
+        icon("chat", "art"),
         h("h2", { style: { marginTop: "8px" } }, "Открой приложение в Telegram"),
         h("p", {}, "Оно работает внутри чата с ботом: кнопка «Уроки» внизу или команда /app."),
       ),

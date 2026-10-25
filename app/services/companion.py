@@ -52,9 +52,25 @@ OPENER_NOTES = {
         'app; its topic was "{topic}". Bring this topic up naturally, the way a friend would, '
         "with one short question. Don't call it a lesson and don't mention this note.]"
     ),
+    "idea": (
+        "[Chat note, not written by the user: {name} picked a topic to talk about in the app: "
+        '"{topic}". Start talking about it the way a friend would — share a short thought of '
+        "your own and ask one question. Don't mention the app or this note.]"
+    ),
+    "mission": (
+        "[Chat note, not written by the user: the role-play scene starts now. Open it in "
+        "character with one or two short lines that set the scene and give {name} a natural "
+        "reason to speak. Don't mention this note.]"
+    ),
+    "comeback": (
+        "[Chat note, not written by the user: {name} hasn't written for about a day. Message "
+        "them first like a real friend would: pick up something specific from your earlier "
+        "conversation (a plan, a problem, a story they told) and ask how it went. One or two "
+        "short sentences, warm and casual. Don't mention this note or that they were away.]"
+    ),
 }
 
-OpenerReason = Literal["onboarding", "reset", "lesson"]
+OpenerReason = Literal["onboarding", "reset", "lesson", "idea", "mission", "comeback"]
 
 _PHOTO_TAG_RE = re.compile(r"^\s*\[photo:\s*(?P<desc>[^\]\n]*)\]\s*", re.IGNORECASE)
 
@@ -76,6 +92,8 @@ def build_system_prompt(user: User, review_items: Sequence[str] = ()) -> str:
         level_guidelines=LEVEL_GUIDELINES[level],
         mode_instructions=MODE_INSTRUCTIONS.get(user.mode, MODE_INSTRUCTIONS["chat"]),
         review_items=list(review_items),
+        mission=user.active_mission,
+        mission_goals="; ".join(g["en"] for g in (user.active_mission or {}).get("goals", [])),
     )
 
 

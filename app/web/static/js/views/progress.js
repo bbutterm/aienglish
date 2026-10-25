@@ -1,7 +1,22 @@
-// Вкладка «Прогресс»: серия, ошибки, слова, сильные и слабые стороны.
+// Вкладка «Прогресс»: серия, темы разговоров, ошибки, слова, сильные и слабые стороны.
 import { api } from "../api.js";
 import { activityCalendar, barList, statTile } from "../charts.js";
-import { card, countLabel, errorCard, formatDate, formatNumber, h, loadingCard, mount, pageHead } from "../ui.js";
+import { icon } from "../icons.js";
+import {
+  button,
+  card,
+  countLabel,
+  errorCard,
+  formatDate,
+  formatNumber,
+  h,
+  haptic,
+  loadingCard,
+  mount,
+  pageHead,
+  tg,
+  toast,
+} from "../ui.js";
 
 const decimal = (value) => String(value).replace(".", ",");
 
@@ -31,10 +46,27 @@ function insightsCard(insights) {
     h("div", { class: "stack" },
       insights.strengths.length ? h("div", {}, h("div", { class: "small muted" }, "Получается"), list(insights.strengths, "good", "✓")) : null,
       insights.weaknesses.length ? h("div", {}, h("div", { class: "small muted" }, "Стоит подтянуть"), list(insights.weaknesses, "bad", "!")) : null,
-      insights.tip_ru ? h("p", {}, `💡 ${insights.tip_ru}`) : null,
+      insights.tip_ru ? h("div", { class: "callout" }, h("strong", {}, "Совет"), h("span", {}, insights.tip_ru)) : null,
       h("p", { class: "tiny muted" }, `По уроку от ${formatDate(insights.date)}`),
     ),
   );
+}
+
+function topicsBlock(topics) {
+  if (!topics.length) return null;
+  return [
+    h("h3", {}, "О чём говорили"),
+    barList({
+      title: "Темы разговоров",
+      subtitle: "реплик за 30 дней",
+      columns: ["Тема", "Реплик"],
+      items: topics.map((t) => ({
+        label: t.topic[0].toUpperCase() + t.topic.slice(1),
+        value: t.messages,
+        note: `ошибок: ${t.mistakes}`,
+      })),
+    }),
+  ];
 }
 
 export async function renderProgress(view, ctx) {
@@ -59,7 +91,7 @@ export async function renderProgress(view, ctx) {
       { class: "tiles" },
       statTile({
         label: "Дней подряд",
-        value: `${p.activity.streak}${p.activity.streak >= 3 ? " 🔥" : ""}`,
+        value: String(p.activity.streak),
         delta: { text: `за 30 дней: ${countLabel(p.activity.active_days_30, ["день", "дня", "дней"])}` },
       }),
       statTile({
@@ -78,6 +110,7 @@ export async function renderProgress(view, ctx) {
         delta: { text: `голосом: ${decimal(t.voice_minutes)} мин` },
       }),
     ),
+    topicsBlock(p.topics),
     h("h3", {}, "Сильные и слабые стороны"),
     insightsCard(p.insights),
     h("h3", {}, "Активность"),
@@ -120,5 +153,41 @@ export async function renderProgress(view, ctx) {
       ),
     );
   }
+  if (ctx.me.features?.referrals) parts.push(inviteCard());
   mount(view, ...parts);
+}
+
+// «Пригласи друга»: ссылка с ref_<id>, обоим неделя премиума, когда друг освоится.
+function inviteCard() {
+  const box = h("section", { class: "card stack", style: { marginTop: "26px" } }, h("div", { class: "spinner" }));
+  api
+    .referral()
+    .then((r) => {
+      const share = button([icon("send"), "Пригласить друга"], () => {
+        const text = "Болтаю по-английски с другом-носителем в Telegram — он замечает ошибки и делает из них уроки. Попробуй:";
+        const url = `https://t.me/share/url?url=${encodeURIComponent(r.link)}&text=${encodeURIComponent(text)}`;
+        haptic("light");
+        if (tg?.openTelegramLink) tg.openTelegramLink(url);
+        else window.open(url, "_blank");
+      });
+      const copy = button("Скопировать ссылку", async () => {
+        try {
+          await navigator.clipboard.writeText(r.link);
+          toast("Ссылка скопирована");
+        } catch {
+          toast(r.link);
+        }
+      }, "btn secondary");
+      mount(
+        box,
+        h("div", { class: "row spread" }, h("div", { class: "eyebrow" }, "Вместе веселее"), icon("gift")),
+        h("h2", {}, "Неделя премиума тебе и другу"),
+        h("p", { class: "muted", style: { marginTop: "0" } }, `Когда друг сделает ${r.activation} реплик, вам обоим откроется ${countLabel(r.days, ["день", "дня", "дней"])} премиума.`),
+        share,
+        copy,
+        r.invited ? h("p", { class: "tiny muted center" }, `Пришло по твоей ссылке: ${r.invited} · освоились: ${r.rewarded}`) : null,
+      );
+    })
+    .catch(() => (box.hidden = true));
+  return box;
 }

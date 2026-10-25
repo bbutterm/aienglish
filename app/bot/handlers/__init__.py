@@ -5,7 +5,18 @@ from aiogram.enums import ChatType
 from aiogram.types import ErrorEvent
 
 from app.bot import texts
-from app.bot.handlers import callbacks, commands, fallback, photo, settings, start, text, voice
+from app.bot.handlers import (
+    callbacks,
+    commands,
+    fallback,
+    forward,
+    payments,
+    photo,
+    settings,
+    start,
+    text,
+    voice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +28,10 @@ def build_router() -> Router:
     root.include_routers(
         start.router,
         commands.router,
+        payments.router,
         settings.router,
         callbacks.router,
+        forward.router,
         text.router,
         voice.router,
         photo.router,

@@ -94,6 +94,7 @@ def get_dispatcher(settings, session_factory, dialog) -> Dispatcher:
     else:
         _dispatcher["settings"] = settings
         _dispatcher["dialog"] = dialog
+        _dispatcher["features"] = dialog.features
         _dispatcher.fsm.storage = MemoryStorage()
     return _dispatcher
 
@@ -172,6 +173,10 @@ async def test_text_dialog_with_analyst_and_mistakes(harness: Harness, fake_apis
     assert await h.count(Mistake) == 1
     assert await h.count(Vocab) == 1
     assert (await h.user()).estimated_level == "A2"
+    # тема реплики (для урока и прогресса) нормализована: «Кино.» → «кино»
+    async with h.session_factory() as session:
+        topics = list(await session.scalars(select(Message.topic).order_by(Message.id)))
+    assert topics == [None, "кино", None]  # приветствие, реплика, ответ собеседника
     assert await h.count(Usage, Usage.kind == "llm_analyst") == 1
     assert await h.count(Usage, Usage.kind == "llm_companion") == 2
 
@@ -327,12 +332,17 @@ async def test_photo_message(harness: Harness, fake_apis) -> None:
         caption="My weekend",
     )
     assert h.tg.of_type(GetFile)[0].file_id == "big"
-    assert h.sent_texts() == ["What a happy dog! Is it yours?"]
+    reply, words = h.sent_texts()
+    assert reply == "What a happy dog! Is it yours?"
+    # «Слова с фото»: отдельным сообщением после ответа, слова — сразу в карточках
+    assert words.startswith("📸") and "<b>mug</b> — кружка" in words
     last = fake_apis.companion_requests()[-1]["messages"][-1]
     assert last["content"][0] == {"type": "text", "text": "My weekend"}
     async with h.session_factory() as session:
         photo_msg = await session.scalar(select(Message).where(Message.kind == "photo"))
+        photo_words = set(await session.scalars(select(Vocab.term).where(Vocab.source == "photo")))
     assert photo_msg.photo_caption == "a dog running on a beach"
+    assert {"mug", "windowsill"} <= photo_words
 
     # В следующем запросе фото уже только текстовым описанием.
     await h.feed(text="Yes, it's mine")

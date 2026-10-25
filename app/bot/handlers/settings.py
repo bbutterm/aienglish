@@ -10,33 +10,51 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.handlers.common import edit_callback_text
-from app.bot.keyboards import LEVEL_CODES, LevelCb, ModeCb, PersonaCb, VoiceModeCb, settings_kb
+from app.bot.keyboards import (
+    LEVEL_CODES,
+    LevelCb,
+    ModeCb,
+    PersonaCb,
+    PingCb,
+    VoiceModeCb,
+    settings_kb,
+)
 from app.config import Settings
 from app.db.models import User
+from app.features import FeatureFlags
 from app.personas import PERSONAS, get_persona
 
 router = Router(name="settings")
 
 
-def settings_text(user: User, settings: Settings) -> str:
+def settings_text(user: User, settings: Settings, ping: bool = False) -> str:
     persona = get_persona(user.persona)
-    return texts.SETTINGS.format(
+    text = texts.SETTINGS.format(
         voice=texts.VOICE_MODES.get(user.voice_mode, user.voice_mode),
         flag=persona.flag,
         persona=persona.name,
         level=user.level,
         mode=texts.MODES.get(user.mode, user.mode).format(every=settings.review_every),
     )
+    if ping:
+        text += texts.SETTINGS_PING.format(state=texts.PING_STATES[user.ping_enabled])
+    return text
 
 
-async def refresh(callback: CallbackQuery, user: User, settings: Settings) -> None:
+async def refresh(
+    callback: CallbackQuery, user: User, settings: Settings, features: FeatureFlags
+) -> None:
     await callback.answer(texts.SAVED)
-    await edit_callback_text(callback, settings_text(user, settings), settings_kb(user))
+    ping = await features.enabled("friend_ping")
+    await edit_callback_text(callback, settings_text(user, settings, ping), settings_kb(user, ping))
 
 
 @router.message(Command("settings", "voice", "mode"))
-async def cmd_settings(message: TgMessage, user: User, settings: Settings) -> None:
-    await message.answer(settings_text(user, settings), reply_markup=settings_kb(user))
+async def cmd_settings(
+    message: TgMessage, user: User, settings: Settings, features: FeatureFlags
+) -> None:
+    ping = await features.enabled("friend_ping")
+    await message.answer(settings_text(user, settings, ping), reply_markup=settings_kb(user, ping))
 
 
 @router.callback_query(VoiceModeCb.filter(F.src == "s"))
@@ -46,11 +64,12 @@ async def on_voice_mode(
     session: AsyncSession,
     user: User,
     settings: Settings,
+    features: FeatureFlags,
 ) -> None:
     if callback_data.mode in texts.VOICE_MODES:
         user.voice_mode = callback_data.mode
         await session.commit()
-    await refresh(callback, user, settings)
+    await refresh(callback, user, settings, features)
 
 
 @router.callback_query(VoiceModeCb.filter(F.src == "o"))
@@ -73,11 +92,12 @@ async def on_persona(
     session: AsyncSession,
     user: User,
     settings: Settings,
+    features: FeatureFlags,
 ) -> None:
     if callback_data.key in PERSONAS:
         user.persona = callback_data.key
         await session.commit()
-    await refresh(callback, user, settings)
+    await refresh(callback, user, settings, features)
 
 
 @router.callback_query(LevelCb.filter(F.src == "s"))
@@ -87,11 +107,12 @@ async def on_level(
     session: AsyncSession,
     user: User,
     settings: Settings,
+    features: FeatureFlags,
 ) -> None:
     if callback_data.level in LEVEL_CODES:
         user.level = callback_data.level
         await session.commit()
-    await refresh(callback, user, settings)
+    await refresh(callback, user, settings, features)
 
 
 @router.callback_query(ModeCb.filter())
@@ -101,6 +122,7 @@ async def on_mode(
     session: AsyncSession,
     user: User,
     settings: Settings,
+    features: FeatureFlags,
 ) -> None:
     if callback_data.mode in texts.MODES and callback_data.mode != user.mode:
         user.mode = callback_data.mode
@@ -108,4 +130,20 @@ async def on_mode(
             # Отсчёт реплик до автоматического разбора начинается с момента включения.
             user.last_review_at = datetime.now(UTC)
         await session.commit()
-    await refresh(callback, user, settings)
+    await refresh(callback, user, settings, features)
+
+
+@router.callback_query(PingCb.filter())
+async def on_ping(
+    callback: CallbackQuery,
+    callback_data: PingCb,
+    session: AsyncSession,
+    user: User,
+    settings: Settings,
+    features: FeatureFlags,
+) -> None:
+    user.ping_enabled = callback_data.on
+    if callback_data.on:
+        user.pings_unanswered = 0
+    await session.commit()
+    await refresh(callback, user, settings, features)

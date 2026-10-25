@@ -13,14 +13,15 @@ from app.personas import get_persona
 
 
 async def welcome(
-    message: TgMessage, session: AsyncSession, user: User, settings: Settings
+    message: TgMessage, session: AsyncSession, user: User, settings: Settings, prefix: str = ""
 ) -> None:
     """Знакомство одним сообщением; пользователь сразу может писать, кнопки уровня необязательны."""
     user.onboarded = True
     await session.commit()
     persona = get_persona(user.persona)
     await message.answer(
-        texts.WELCOME.format(
+        prefix
+        + texts.WELCOME.format(
             name=escape(user.name),
             persona=persona.name,
             flag=persona.flag,

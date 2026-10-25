@@ -4,11 +4,11 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Date, cast, distinct, func, or_, select
+from sqlalchemy import Date, cast, distinct, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db.models import Lesson, Message, Mistake, Usage, User
+from app.db.models import Lesson, Message, Mistake, Payment, Usage, User
 from app.services.plans import is_premium, limits_for
 from app.services.progress import build_progress
 
@@ -271,3 +271,46 @@ async def user_detail(
             for lesson in lessons
         ],
     }
+
+
+async def sources(session: AsyncSession, days: int = 30, now: datetime | None = None) -> list[dict]:
+    """Откуда приходят пользователи (параметр /start) и сколько из них освоились (5+ реплик)."""
+    now = now or datetime.now(UTC)
+    talked = (
+        select(Message.user_id)
+        .where(Message.role == "user")
+        .group_by(Message.user_id)
+        .having(func.count(Message.id) >= 5)
+        .subquery()
+    )
+    source = func.coalesce(User.source, literal_column("'direct'"))
+    rows = await session.execute(
+        select(
+            source,
+            func.count(User.id),
+            func.count(talked.c.user_id),
+            func.count(User.id).filter(User.premium_until > now),
+        )
+        .outerjoin(talked, talked.c.user_id == User.id)
+        .where(User.created_at >= now - timedelta(days=days))
+        .group_by(source)
+        .order_by(func.count(User.id).desc())
+    )
+    return [
+        {"source": source, "users": users, "activated": activated, "premium": premium}
+        for source, users, activated, premium in rows
+    ]
+
+
+async def payments_summary(
+    session: AsyncSession, days: int = 30, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Оплаты звёздами по тарифам за период."""
+    now = now or datetime.now(UTC)
+    rows = await session.execute(
+        select(Payment.plan, func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.created_at >= now - timedelta(days=days))
+        .group_by(Payment.plan)
+        .order_by(func.sum(Payment.amount).desc())
+    )
+    return [{"plan": plan, "count": count, "stars": int(stars)} for plan, count, stars in rows]

@@ -55,7 +55,13 @@ async def seed_user(session_factory, user_id: int = USER_ID, **fields) -> None:
         user.display_name = "Sasha"
         for key, value in fields.items():
             setattr(user, key, value)
-        msg = await repo.add_message(session, user_id=user_id, role="user", kind="text", text="hi")
+        msg = await repo.add_message(
+            session, user_id=user_id, role="user", kind="text", text="I go to cinema yesterday"
+        )
+        msg.topic = "кино"
+        await repo.add_message(
+            session, user_id=user_id, role="assistant", kind="text", text="What did you watch?"
+        )
         await repo.save_mistakes(
             session,
             user_id,
@@ -127,23 +133,43 @@ async def test_full_lesson_flow(web: Web, session_factory, fake_apis) -> None:
     await seed_user(session_factory)
     today = (await web.get("/api/lessons/today")).json()
     assert (today["lessons"], today["remaining"], today["limit"]) == ([], 1, 1)
-    assert today["material"] == {"mistakes": 1, "words": 1}
+    assert today["material"] == {"mistakes": 1, "words": 1, "messages": 1, "topics": ["кино"]}
 
     response = await web.post("/api/lessons")
     assert response.status_code == 200, response.text
     lesson = response.json()
-    assert lesson["title"] == "Что было вчера"
-    assert [e["type"] for e in lesson["exercises"]] == ["fix", "gap", "translate", "listen"]
+    assert (lesson["title"], lesson["topic_ru"]) == ("Кино и прошедшее время", "кино")
+    # часть 1 — тема разговора, часть 2 — ошибки и грамматика
+    assert [(e["section"], e["type"]) for e in lesson["exercises"]] == [
+        ("topic", "translate"),
+        ("topic", "listen"),
+        ("grammar", "fix"),
+        ("grammar", "gap"),
+    ]
+    assert [p["en"] for p in lesson["topic_block"]["phrases"]] == [
+        "to go to the cinema",
+        "a blockbuster",
+    ]
+    assert [m["original"] for m in lesson["mistakes_review"]] == ["I go to cinema yesterday"]
+    mistake_id = lesson["mistakes_review"][0]["id"]
+    assert [(g["title_ru"], g["mistake_ids"]) for g in lesson["grammar"]] == [
+        ("Past Simple", [mistake_id])
+    ]
     assert all("answer" not in e and "result" not in e for e in lesson["exercises"])
-    assert "text" not in lesson["exercises"][3]
+    assert "text" not in lesson["exercises"][1]
     assert lesson["cards"][0]["term"] == "blockbuster"
     material = fake_apis.lesson_requests()[0]["messages"][1]["content"]
     assert "I go to cinema yesterday" in material and "blockbuster" in material
+    # урок строится по разговору: реплики собеседника и темы тоже уходят модели
+    assert (
+        "Friend: What did you watch?" in material and '"conversation_topics": ["кино"]' in material
+    )
 
     stored = await stored_lesson(session_factory, lesson["id"])
-    fix = stored.payload["exercises"][0]
+    translate_i, listen_i, fix_i, gap_i = range(4)
+    fix = stored.payload["exercises"][fix_i]
     url = f"/api/lessons/{lesson['id']}/answers"
-    result = (await web.post(url, json={"index": 0, "choice": fix["answer"]})).json()
+    result = (await web.post(url, json={"index": fix_i, "choice": fix["answer"]})).json()
     assert result["correct"] is True and result["explanation_ru"] == "Прошедшее время"
     async with session_factory() as session:
         mistake = await session.scalar(select(Mistake))
@@ -152,26 +178,26 @@ async def test_full_lesson_flow(web: Web, session_factory, fake_apis) -> None:
 
     # повторный ответ не переигрывает первый
     wrong_choice = (fix["answer"] + 1) % len(fix["options"])
-    again = (await web.post(url, json={"index": 0, "choice": wrong_choice})).json()
+    again = (await web.post(url, json={"index": fix_i, "choice": wrong_choice})).json()
     assert again["correct"] is True and again["choice"] == fix["answer"]
 
-    gap = stored.payload["exercises"][1]
+    gap = stored.payload["exercises"][gap_i]
     wrong = (gap["answer"] + 1) % len(gap["options"])
-    assert (await web.post(url, json={"index": 1, "choice": wrong})).json()["correct"] is False
+    assert (await web.post(url, json={"index": gap_i, "choice": wrong})).json()["correct"] is False
     assert (await web.post(url, json={"index": 9, "choice": 0})).status_code == 422
-    assert (await web.post(url, json={"index": 2, "choice": 7})).status_code == 422
+    assert (await web.post(url, json={"index": translate_i, "choice": 7})).status_code == 422
 
-    listen_answer = stored.payload["exercises"][3]["answer"]
-    listen = (await web.post(url, json={"index": 3, "choice": listen_answer})).json()
+    listen_answer = stored.payload["exercises"][listen_i]["answer"]
+    listen = (await web.post(url, json={"index": listen_i, "choice": listen_answer})).json()
     assert listen["text"] == "We went to the cinema last night"
 
-    audio_url = f"/api/lessons/{lesson['id']}/audio/3"
+    audio_url = f"/api/lessons/{lesson['id']}/audio/{listen_i}"
     audio = await web.get(audio_url)
     assert audio.status_code == 200 and audio.headers["content-type"] == "audio/mpeg"
     assert (await web.get(audio_url)).content == audio.content
     assert len(fake_apis.tts_requests) == 1  # второй раз — из кэша
     assert fake_apis.tts_requests[0]["params"]["output_format"] == "mp3_44100_64"
-    assert (await web.get(f"/api/lessons/{lesson['id']}/audio/0")).status_code == 404
+    assert (await web.get(f"/api/lessons/{lesson['id']}/audio/{fix_i}")).status_code == 404
 
     # чужой урок не виден
     assert (await web.post(url, user_id=777, json={"index": 2, "choice": 0})).status_code == 404
@@ -202,8 +228,9 @@ async def test_lesson_fallback_when_llm_returns_garbage(
     await seed_user(session_factory)
     fake_apis.lesson_mode = "garbage"
     lesson = (await web.post("/api/lessons")).json()
-    assert lesson["title"] == "Повторение"
-    assert [e["type"] for e in lesson["exercises"]] == ["fix"]
+    assert (lesson["title"], lesson["topic_ru"]) == ("Разбор ошибок", "кино")
+    assert [(e["section"], e["type"]) for e in lesson["exercises"]] == [("grammar", "fix")]
+    assert [m["corrected"] for m in lesson["mistakes_review"]] == ["I went to the cinema yesterday"]
     assert lesson["cards"][0]["term"] == "blockbuster"
 
 
@@ -239,6 +266,34 @@ async def test_progress(web: Web, session_factory) -> None:
         "prev": 0,
     }
     assert progress["insights"]["weaknesses"] == ["Путаешь времена"]
+
+
+async def test_progress_topics(web: Web, session_factory) -> None:
+    await seed_user(session_factory)  # «кино»: 1 реплика, 1 ошибка
+    async with session_factory() as session:
+
+        async def say(text: str, topic: str | None, mistakes: int = 0, role: str = "user") -> None:
+            msg = await repo.add_message(
+                session, user_id=USER_ID, role=role, kind="text", text=text
+            )
+            msg.topic = topic
+            items = [
+                repo.MistakeItem(f"{text} {i}", "ok", "grammar", "", 1) for i in range(mistakes)
+            ]
+            await repo.save_mistakes(session, USER_ID, msg.id, items)
+
+        await say("Movies are my hobby", "кино", mistakes=2)
+        await say("I work as developer", "работа")
+        await say("Cool job!", "работа", role="assistant")  # реплики собеседника не считаем
+        await say("Hello", None)
+        await session.commit()
+    progress = (await web.get("/api/progress")).json()
+    assert progress["topics"] == [
+        {"topic": "кино", "messages": 2, "mistakes": 3},
+        {"topic": "работа", "messages": 1, "mistakes": 0},
+    ]
+    material = (await web.get("/api/lessons/today")).json()["material"]
+    assert material["topics"] == ["кино", "работа"] and material["messages"] == 4
 
 
 async def test_vocab_review(web: Web, session_factory) -> None:

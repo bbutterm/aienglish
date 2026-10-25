@@ -136,6 +136,25 @@ class VocabItem:
     term: str
     translation_ru: str | None
     source: str
+    example: str | None = None
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class UpgradeItem:
+    basic: str  # что сказал ученик: very big
+    better: str  # как сказать сильнее: huge
+    translation_ru: str | None
+    example: str | None  # фраза ученика с новым словом
+
+    def as_vocab(self) -> VocabItem:
+        return VocabItem(
+            term=self.better,
+            translation_ru=self.translation_ru,
+            source="upgrade",
+            example=self.example,
+            note=self.basic,
+        )
 
 
 async def save_mistakes(
@@ -181,6 +200,8 @@ async def save_vocab(session: AsyncSession, user_id: int, items: Sequence[VocabI
                     "term": item.term,
                     "translation_ru": item.translation_ru,
                     "source": item.source,
+                    "example": item.example,
+                    "note": item.note,
                 }
                 for item in items
             ]

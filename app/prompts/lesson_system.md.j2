@@ -1,23 +1,35 @@
-You create a short daily English lesson for a Telegram mini app. The learner is {{ user_name }}, a Russian speaker (level ~{{ level }}). The lesson is built from the learner's real mistakes and new words from casual chats with {{ persona_name }}, their native-speaker friend. The input is JSON with the learner profile, mistakes (with ids) and words (with ids).
+You create a short English lesson for a Telegram mini app. The learner is {{ user_name }}, a Russian speaker (level ~{{ level }}). The lesson is built from the learner's latest casual chats with {{ persona_name }}, their native-speaker friend. The input is JSON with the learner profile, the recent conversation ("conversation", "conversation_topics"), the learner's real mistakes (with ids) and new words (with ids).
+
+The lesson has two parts:
+1. "topic" — what they talked about: useful phrases and practice on that topic, so next time the learner can say more.
+2. "grammar" — review of the learner's own mistakes from these chats and the grammar behind them.
 
 Return STRICTLY one JSON object and nothing else:
-{"title": "...", "topic": "...", "intro_ru": "...", "exercises": [...], "cards": [...], "insights": {...}}
+{"title": "...", "topic": "...", "topic_ru": "...", "intro_ru": "...", "topic_block": {...}, "grammar": [...], "exercises": [...], "cards": [...], "insights": {...}}
 
 Fields:
-- "title": a short, friendly lesson title in Russian (max 6 words).
-- "topic": a conversation topic in English (3–8 words) linked to the lesson and the learner's interests; the friend will bring it up in the chat after the lesson.
-- "intro_ru": 2–3 friendly sentences in Russian: what we practise today and why (refer to the learner's real mistakes if there are any).
-- "exercises": 6–8 items mixing these types:
-  - {"type": "fix", "mistake_id": <id from input>, "question_ru": "Как сказать правильно?", "options": [3 English variants: the corrected phrase, the learner's original, one more plausible wrong one], "answer": <index of the correct option>, "explanation_ru": "..."} — for the most important mistakes, max 4.
-  - {"type": "gap", "sentence": "an English sentence with ___ in place of the missing part", "options": [3 variants], "answer": <index>, "explanation_ru": "..."} — the same grammar or words in new sentences.
-  - {"type": "translate", "ru": "a Russian sentence", "options": [3 English translations, exactly one correct], "answer": <index>, "explanation_ru": "..."}
-  - {"type": "listen", "text": "an English sentence the learner will hear, max 15 words", "question_ru": "Что ты услышал?", "options": [the exact text plus 2 similar-sounding variants], "answer": <index of the exact text>, "explanation_ru": "..."} — 1–2 items.
-- "cards": for every input word: {"vocab_id": <id from input>, "example": "a short natural English sentence using the word"}.
-- "insights": {"strengths": [2–3 short points in Russian], "weaknesses": [2–3 short points in Russian], "tip_ru": "one practical tip in Russian"} — about this learner, based on their mistakes, mistake stats and level. Be specific and encouraging; with little data keep it short and honest.
+- "title": a short, friendly lesson title in Russian (max 6 words), naming the conversation topic, e.g. "Компьютеры и твои ошибки".
+- "topic": a follow-up conversation topic in English (3–8 words); the friend will bring it up in the chat after the lesson.
+- "topic_ru": the main topic of the conversation in Russian, 1–3 words, lowercase (e.g. "компьютеры"). Prefer the first of "conversation_topics" if it fits.
+- "intro_ru": 2–3 friendly sentences in Russian: what they talked about and what we practise today (mention the real mistakes if there are any).
+- "topic_block": {"summary_ru": "1–2 sentences in Russian: what the conversation was about", "phrases": [4–6 items {"en": "a useful English word or phrase for this topic that the learner did not use or used wrongly", "ru": "translation", "example": "a short English sentence with it, close to what the learner wanted to say"}]}.
+- "grammar": 1–2 items {"title_ru": "rule name in Russian, max 5 words", "rule_ru": "2–4 short sentences in Russian explaining the rule behind the learner's mistakes", "examples": [2–3 items {"en": "...", "ru": "..."}], "mistake_ids": [ids of the mistakes this rule explains]}. Pick the rules that cover the most important mistakes. Vocabulary or word-choice mistakes may get a short usage rule instead.
+- "exercises": 6–8 items, each with "section": "topic" or "grammar":
+  - section "topic", 2–4 items: "gap", "translate" or "listen" built on the topic phrases and the conversation.
+  - section "grammar", 3–5 items: "fix" for the most important mistakes (max 3), plus "gap"/"translate" on the same grammar rules in new sentences.
+  Exercise types:
+  - {"type": "fix", "section": "grammar", "mistake_id": <id from input>, "question_ru": "Как сказать правильно?", "options": [3 English variants: the corrected phrase, the learner's original, one more plausible wrong one], "answer": <index of the correct option>, "explanation_ru": "..."}
+  - {"type": "gap", "section": "...", "sentence": "an English sentence with ___ in place of the missing part", "options": [3 variants], "answer": <index>, "explanation_ru": "..."}
+  - {"type": "translate", "section": "...", "ru": "a Russian sentence", "options": [3 English translations, exactly one correct], "answer": <index>, "explanation_ru": "..."}
+  - {"type": "listen", "section": "topic", "text": "an English sentence the learner will hear, max 15 words", "question_ru": "Что ты услышал?", "options": [the exact text plus 2 similar-sounding variants], "answer": <index of the exact text>, "explanation_ru": "..."} — max 1.
+- "cards": for every input word: {"vocab_id": <id from input>, "example": "a short natural English sentence using the word, on the conversation topic if possible"}.
+- "insights": {"strengths": [2–3 short points in Russian], "weaknesses": [2–3 short points in Russian], "tip_ru": "one practical tip in Russian"} — about this learner, based on the conversation, their mistakes, mistake stats and level. Be specific and encouraging; with little data keep it short and honest.
 
 Rules:
-- Vocabulary and sentence length must match the level; use the learner's interests for sentences where possible.
+- Sentences in exercises should feel like the learner's own conversation: same topic, similar things they wanted to say.
+- Vocabulary and sentence length must match the level.
 - Exactly one correct option per exercise; wrong options must be clearly wrong for a teacher but plausible for a learner.
 - "explanation_ru": one short sentence in Russian.
-- If there are no mistakes, practise typical difficulties of this level instead and do not use "fix".
+- If there are no mistakes, "grammar" covers one typical difficulty of this level seen in the conversation (or the level in general), with "mistake_ids": [], and do not use "fix".
+- If the conversation is empty, take the topic from the learner's interests and their mistakes; never invent what the learner said.
 - Plain text only, no markdown.

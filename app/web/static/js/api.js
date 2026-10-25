@@ -45,6 +45,17 @@ export const api = {
   progress: () => request("GET", "/api/progress"),
   vocab: () => request("GET", "/api/vocab"),
   review: (id, grade) => request("POST", `/api/vocab/${id}/review`, { grade }),
+  ideas: () => request("GET", "/api/ideas"),
+  refreshIdeas: () => request("POST", "/api/ideas/refresh"),
+  openIdea: (id) => request("POST", `/api/ideas/${id}/open`),
+  startIdea: (id) => request("POST", `/api/ideas/${id}/start`),
+  podcasts: () => request("GET", "/api/podcasts"),
+  createPodcast: () => request("POST", "/api/podcasts"),
+  podcastAudio: (id) => request("GET", `/api/podcasts/${id}/audio`, undefined, { raw: true }),
+  sendPodcast: (id) => request("POST", `/api/podcasts/${id}/send`),
+  referral: () => request("GET", "/api/referral"),
+  premium: () => request("GET", "/api/premium"),
+  premiumInvoice: (plan) => request("POST", `/api/premium/${plan}/invoice`),
   admin: {
     overview: (days = 14) => request("GET", `/api/admin/overview?days=${days}`),
     users: (q = "", offset = 0) =>
@@ -52,5 +63,8 @@ export const api = {
     user: (id) => request("GET", `/api/admin/users/${id}`),
     premium: (id, days) => request("POST", `/api/admin/users/${id}/premium`, { days, notify: true }),
     block: (id, blocked) => request("POST", `/api/admin/users/${id}/block`, { blocked }),
+    features: () => request("GET", "/api/admin/features"),
+    setFeature: (key, enabled) => request("POST", `/api/admin/features/${key}`, { enabled }),
+    sources: (days = 30) => request("GET", `/api/admin/sources?days=${days}`),
   },
 };
