@@ -60,12 +60,13 @@ async def cmd_reset(
         await welcome(message, session, user, settings)
     await dialog.memory.reset(session, user)
     await message.answer(texts.RESET_DONE)
-    # Новая тема — это LLM-вызов, поэтому уважаем дневной лимит.
-    if await dialog.messages_left(session, user) <= 0:
-        limit = limits_for(user, settings).messages
-        await message.answer(texts.LIMIT_REACHED.format(limit=limit))
-        return
-    await send_opener(bot, message.chat.id, session, user, dialog, reason="reset")
+    # Новая тема — это LLM-вызов: уважаем дневной лимит и расходуем из него одну реплику.
+    async with dialog.locks.get(user.id):
+        if await dialog.messages_left(session, user) <= 0:
+            limit = limits_for(user, settings).messages
+            await message.answer(texts.LIMIT_REACHED.format(limit=limit))
+            return
+        await send_opener(bot, message.chat.id, session, user, dialog, reason="reset")
 
 
 @router.message(Command("stop"))

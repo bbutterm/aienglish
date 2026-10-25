@@ -36,16 +36,35 @@ class UserMiddleware(BaseMiddleware):
         user = await repo.upsert_user(
             data["session"], tg_user.id, tg_user.username, tg_user.first_name
         )
-        if user.blocked:
-            return None  # заблокированных админом молча игнорируем
+        paid = isinstance(event, TgMessage) and event.successful_payment is not None
+        if user.blocked and not paid:
+            # Заблокированных админом молча игнорируем. Кроме оплаты: продление подписки
+            # приходит без pre-checkout, звёзды уже списаны — платёж обязаны записать.
+            return None
         data["user"] = user
         return await handler(event, data)
 
 
-class DialogGateMiddleware(BaseMiddleware):
-    """Для диалоговых хэндлеров: знакомство (без анкеты) и дневной лимит реплик."""
+class UserLockMiddleware(BaseMiddleware):
+    """Платные кнопки (🔊, «Как сказать лучше») одного пользователя — по очереди."""
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
+        async with data["dialog"].locks.get(data["user"].id):
+            return await handler(event, data)
+
+
+class DialogGateMiddleware(BaseMiddleware):
+    """Для диалоговых хэндлеров: знакомство (без анкеты) и дневной лимит реплик.
+
+    Реплики одного пользователя идут по очереди: проверка лимита видит уже записанные.
+    """
+
+    async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
+        async with data["dialog"].locks.get(data["user"].id):
+            return await self._gate(handler, event, data)
+
+    @staticmethod
+    async def _gate(handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         assert isinstance(event, TgMessage)
         user = data["user"]
         if not user.onboarded:

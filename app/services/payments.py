@@ -97,7 +97,12 @@ async def apply_payment(
         return None
     plan, _ = parsed
     charge = payment.telegram_payment_charge_id
+    # Блокируем строку пользователя: повторная доставка того же платежа ждёт и видит его,
+    # а бонус за друга или выдача админом в ту же секунду не затирается.
+    await session.flush()  # несохранённые изменения пользователя не теряем
+    await session.refresh(user, ["premium_until"], with_for_update=True)
     if await session.scalar(select(Payment.id).where(Payment.charge_id == charge)):
+        await session.commit()
         return None
     # Каждый платёж (и каждое продление подписки) добавляет оплаченные дни к текущему концу
     # премиума — поверх пропуска, бонуса за друга или выдачи админом.

@@ -1,6 +1,7 @@
 import asyncio
 import enum
 import logging
+import weakref
 from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -58,6 +59,23 @@ class BackgroundTasks:
             await asyncio.wait(set(self._tasks), timeout=timeout)
 
 
+class UserLocks:
+    """Платные апдейты одного пользователя — по очереди.
+
+    aiogram обрабатывает апдейты параллельно: без очереди пачка голосовых, альбом фото или три
+    быстрых нажатия 🔊 проходят проверку лимита до того, как первый из них что-то запишет.
+    """
+
+    def __init__(self) -> None:
+        self._locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
+
+    def get(self, user_id: int) -> asyncio.Lock:
+        lock = self._locks.get(user_id)
+        if lock is None:
+            lock = self._locks[user_id] = asyncio.Lock()
+        return lock
+
+
 VOICE_OFFER_AFTER_TAPS = 2
 
 
@@ -66,6 +84,9 @@ def wants_voice(user: User, input_kind: str | None) -> bool:
     if user.voice_mode == "always":
         return True
     return user.voice_mode == "auto" and input_kind == "voice"
+
+
+RESET_USAGE_KIND = "llm_reset"  # первая реплика новой темы по /reset — считается в дневной лимит
 
 
 class SpeakStatus(enum.Enum):
@@ -109,6 +130,7 @@ class DialogService:
         self.stt = stt
         self.tts = tts
         self.tasks = tasks
+        self.locks = UserLocks()
         self._tts_limit_notified: set[tuple[int, date]] = set()
         self._tts_taps: dict[tuple[int, date], int] = {}
         self._voice_offered: set[int] = set()
@@ -116,8 +138,10 @@ class DialogService:
     # --- лимиты ---
 
     async def messages_left(self, session: AsyncSession, user: User) -> int:
+        """Остаток дневного лимита: реплики пользователя и новые темы по /reset."""
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_user_messages_since(session, user.id, since)
+        used += await repo.count_usage_since(session, user.id, RESET_USAGE_KIND, since)
         return limits_for(user, self.settings).messages - used
 
     # --- диалог ---
@@ -192,7 +216,8 @@ class DialogService:
         message = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=reply.text
         )
-        await record_llm(session, user.id, "llm_companion", reply.llm)
+        kind = RESET_USAGE_KIND if reason == "reset" else "llm_companion"
+        await record_llm(session, user.id, kind, reply.llm)
         await session.commit()
         return message
 

@@ -9,7 +9,7 @@ from aiogram.types import BufferedInputFile
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 
 from app.bot import texts
 from app.bot.after_turn import start_mission, start_talk
@@ -128,8 +128,19 @@ async def start_idea(
     )
     if (started_today or 0) >= STARTS_PER_DAY:
         raise error("limit_reached")
-    idea.started_at = now
+    # Атомарно: из параллельных нажатий «Обсудить» собеседника запускает только одно.
+    claimed = await session.scalar(
+        update(TopicIdea)
+        .where(
+            TopicIdea.id == idea.id,
+            or_(TopicIdea.started_at.is_(None), TopicIdea.started_at < now - RESTART_AFTER),
+        )
+        .values(started_at=now)
+        .returning(TopicIdea.id)
+    )
     await session.commit()
+    if claimed is None:
+        return {"ok": True, "kind": idea.kind}
     starter = start_mission if idea.kind == "mission" else start_talk
     state.tasks.spawn(chat_start(state, user.id, idea.id, starter), name=f"idea:{user.id}")
     return {"ok": True, "kind": idea.kind}

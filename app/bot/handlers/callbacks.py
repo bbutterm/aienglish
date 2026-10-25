@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.keyboards import RewriteCb, TtsCb, voice_offer_kb
+from app.bot.middlewares import UserLockMiddleware
 from app.db import repo
 from app.db.models import Message, User
 from app.llm.openrouter import LLMError, LLMParseError
@@ -19,6 +20,7 @@ from app.services.usage import record_llm
 logger = logging.getLogger(__name__)
 
 router = Router(name="callbacks")
+router.callback_query.middleware(UserLockMiddleware())
 
 
 async def _safe_answer(

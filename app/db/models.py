@@ -143,7 +143,7 @@ class Usage(Base):
     user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL")
     )
-    kind: Mapped[str]  # llm_companion|llm_analyst|llm_summary|stt|tts
+    kind: Mapped[str]  # llm_companion|llm_reset|llm_analyst|llm_summary|stt|tts|...
     model: Mapped[str | None]
     input_tokens: Mapped[int | None]
     output_tokens: Mapped[int | None]

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -604,12 +604,21 @@ class LessonService:
         """Завершает урок. True — если он завершён именно сейчас (а не раньше)."""
         if lesson.status == "done":
             return False
-        lesson.status = "done"
-        lesson.score = sum(1 for a in lesson.answers.values() if a.get("correct"))
-        lesson.total = len(lesson.payload["exercises"])
-        lesson.completed_at = datetime.now(UTC)
+        # Атомарно: из двух параллельных запросов урок завершает (и шлёт follow-up) только один.
+        claimed = await session.scalar(
+            update(Lesson)
+            .where(Lesson.id == lesson.id, Lesson.status != "done")
+            .values(
+                status="done",
+                score=sum(1 for a in lesson.answers.values() if a.get("correct")),
+                total=len(lesson.payload["exercises"]),
+                completed_at=datetime.now(UTC),
+            )
+            .returning(Lesson.id)
+        )
         await session.commit()
-        return True
+        await session.refresh(lesson)
+        return claimed is not None
 
     async def audio(
         self, session: AsyncSession, user: User, lesson: Lesson, index: int
