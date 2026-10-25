@@ -4,7 +4,7 @@ from html import escape
 from typing import Literal
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from aiogram.types import Message as TgMessage
 from aiogram.utils.chat_action import ChatActionSender
@@ -99,16 +99,21 @@ async def deliver_reply(
     if voice:
         caption = voice_caption(reply_text, transcript)
         if caption is not None:
-            status = await dialog.speak(
-                bot,
-                chat_id,
-                session,
-                user,
-                reply,
-                caption=caption,
-                notify_limit=True,
-                reply_markup=reply_kb(reply.id, tts=False, rewrite=rewrite),
-            )
+            try:
+                status = await dialog.speak(
+                    bot,
+                    chat_id,
+                    session,
+                    user,
+                    reply,
+                    caption=caption,
+                    notify_limit=True,
+                    reply_markup=reply_kb(reply.id, tts=False, rewrite=rewrite),
+                )
+            except TelegramAPIError:
+                # Голосовое не ушло — ответ всё равно доставим текстом ниже.
+                logger.warning("Voice reply failed for user %s", user.id, exc_info=True)
+                status = SpeakStatus.FAILED
             if status is SpeakStatus.SENT:
                 return
     # Текстом: если голос не нужен, исчерпан лимит озвучки или TTS не ответил.
@@ -171,6 +176,7 @@ async def respond(
     if await dialog.review_due(session, user):
         if turn.analysis is not None:
             # Дождёмся аналитика, чтобы последняя реплика попала в разбор.
+            await session.commit()
             await asyncio.wait({turn.analysis}, timeout=ANALYST_WAIT_SECONDS)
         report = await build_review(session, user)
         await bot.send_message(chat_id, report or texts.REVIEW_EMPTY)

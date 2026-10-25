@@ -1,14 +1,17 @@
 """Слова в карточки из фото и пересланных английских текстов."""
 
 import base64
+import logging
 from dataclasses import dataclass
 
 from app.config import Settings
 from app.db.models import User
 from app.db.repo import VocabItem
 from app.llm.jsonutil import extract_json_object
-from app.llm.openrouter import LLMResult, OpenRouterClient
+from app.llm.openrouter import LLMParseError, LLMResult, OpenRouterClient
 from app.prompts import render
+
+logger = logging.getLogger(__name__)
 
 PHOTO_WORDS = 5
 FORWARD_WORDS = 6
@@ -77,7 +80,11 @@ class WordExtractor:
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
         ]
         result = await self._chat(system, content)
-        words, _ = parse_words(result.text, "photo", PHOTO_WORDS)
+        try:
+            words, _ = parse_words(result.text, "photo", PHOTO_WORDS)
+        except ValueError:
+            logger.warning("Photo words: unparseable JSON: %.200s", result.text)
+            words = []
         return Extracted(words=words, summary_ru=None, llm=result)
 
     async def from_text(self, user: User, text: str) -> Extracted:
@@ -89,7 +96,10 @@ class WordExtractor:
             count=FORWARD_WORDS,
         )
         result = await self._chat(system, text[:4000])
-        words, summary = parse_words(result.text, "forward", FORWARD_WORDS)
+        try:
+            words, summary = parse_words(result.text, "forward", FORWARD_WORDS)
+        except ValueError as exc:
+            raise LLMParseError(str(exc), result) from exc
         return Extracted(words=words, summary_ru=summary, llm=result)
 
     async def _chat(self, system: str, content: object) -> LLMResult:

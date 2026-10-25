@@ -43,6 +43,11 @@ def build_router() -> Router:
 
 async def on_error(event: ErrorEvent) -> None:
     logger.error("Update handling failed", exc_info=event.exception)
+    if event.update.callback_query is not None:
+        try:
+            await event.update.callback_query.answer()  # иначе крутилка на кнопке не гаснет
+        except Exception:
+            logger.debug("Could not answer callback after error", exc_info=True)
     message = event.update.message or (
         event.update.callback_query.message if event.update.callback_query else None
     )

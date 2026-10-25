@@ -13,7 +13,7 @@ from app.bot.after_turn import app_button
 from app.bot.middlewares import DialogGateMiddleware
 from app.db import repo
 from app.db.models import User
-from app.llm.openrouter import LLMError
+from app.llm.openrouter import LLMError, LLMParseError
 from app.services.dialog import DialogService
 from app.services.extract import looks_english
 from app.services.plans import limits_for
@@ -48,8 +48,11 @@ async def on_forward(
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=message.chat.id):
             extracted = await dialog.extractor.from_text(user, text)
-    except (LLMError, ValueError):
+    except (LLMError, ValueError) as exc:
         logger.exception("Forward extraction failed for user %s", user.id)
+        if isinstance(exc, LLMParseError):  # модель ответила — расход и лимит засчитываем
+            await record_llm(session, user.id, "llm_forward", exc.result)
+            await session.commit()
         await message.reply(texts.FORWARD_FAILED)
         return
     await record_llm(session, user.id, "llm_forward", extracted.llm)

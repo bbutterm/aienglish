@@ -187,6 +187,7 @@ class DialogService:
         topic: str | None = None,
     ) -> Message:
         summary, history = await self.memory.context(session, user)
+        await session.commit()  # запрос к модели — без открытой транзакции
         reply = await self.companion.opener(user, history, summary, reason=reason, topic=topic)
         message = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=reply.text
@@ -306,6 +307,7 @@ class DialogService:
                     )
             return SpeakStatus.LIMIT
 
+        await session.commit()  # TTS и отправка голосового — без открытой транзакции
         text = prepare_tts_text(message.text or "", self.settings.tts_max_chars)
         if not text:
             return SpeakStatus.FAILED

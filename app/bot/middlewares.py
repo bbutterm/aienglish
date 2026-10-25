@@ -58,4 +58,6 @@ class DialogGateMiddleware(BaseMiddleware):
                 text += texts.LIMIT_UPSELL
             await event.answer(text)
             return None
+        # Дальше скачивание файла, STT и модель — соединение с БД не держим.
+        await data["session"].commit()
         return await handler(event, data)

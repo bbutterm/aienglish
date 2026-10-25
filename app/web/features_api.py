@@ -198,6 +198,7 @@ async def send_podcast(
     podcast = await own_podcast(session, user, podcast_id)
     if podcast.audio is None:
         raise api_error(404, "no_audio", "У выпуска нет аудио.")
+    await session.commit()  # загрузка аудио в Telegram — без открытой транзакции
     await state.bot.send_audio(
         user.id,
         BufferedInputFile(podcast.audio, filename="english-buddy-podcast.mp3"),

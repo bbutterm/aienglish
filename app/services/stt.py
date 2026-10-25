@@ -40,10 +40,18 @@ class SpeechToText:
                 last_error = exc
             else:
                 if response.status_code == 200:
-                    return (response.json().get("text") or "").strip()
-                last_error = STTError(f"HTTP {response.status_code}: {response.text[:300]}")
-                if response.status_code < 500 and response.status_code != 429:
-                    break
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        data = None  # 200 со страницей ошибки прокси — как 5xx, повторяем
+                    if isinstance(data, dict):
+                        text = data.get("text")
+                        return text.strip() if isinstance(text, str) else ""
+                    last_error = STTError(f"bad body: {response.text[:300]}")
+                else:
+                    last_error = STTError(f"HTTP {response.status_code}: {response.text[:300]}")
+                    if response.status_code < 500 and response.status_code != 429:
+                        break
             logger.warning("STT attempt %d failed: %s", attempt + 1, last_error)
             if attempt < self._retries:
                 await asyncio.sleep(1)

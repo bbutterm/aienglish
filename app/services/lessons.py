@@ -127,7 +127,8 @@ def clean_exercise(
     }
     if kind == "fix":
         mistake_id = item.get("mistake_id")
-        exercise["mistake_id"] = mistake_id if mistake_id in mistake_ids else None
+        valid = isinstance(mistake_id, int) and not isinstance(mistake_id, bool)
+        exercise["mistake_id"] = mistake_id if valid and mistake_id in mistake_ids else None
     elif kind == "gap":
         sentence = _text(item.get("sentence"), 300)
         if not sentence or not _GAP_RE.search(sentence):
@@ -530,7 +531,13 @@ class LessonService:
             reasoning_effort=self._settings.lesson_reasoning_effort or None,
         )
         await record_llm(session, user.id, "llm_lesson", result)
-        return build_payload(extract_json_object(result.text), material, rng)
+        try:
+            return build_payload(extract_json_object(result.text), material, rng)
+        except ValueError:
+            raise
+        except Exception as exc:  # неожиданная форма JSON — простой урок лучше, чем ошибка 500
+            logger.exception("Unexpected lesson JSON for user %s", user.id)
+            raise ValueError("unexpected lesson JSON") from exc
 
     async def _material_json(self, session: AsyncSession, user: User, material: Material) -> str:
         since = datetime.now(UTC) - timedelta(days=30)
@@ -619,6 +626,7 @@ class LessonService:
         cached = await session.get(AudioCache, key)
         if cached is not None:
             return cached.content, cached.mime
+        await session.commit()  # TTS — без открытой транзакции
 
         try:
             content = await self._tts.synthesize_raw(text, voice_id, audio_format)

@@ -11,7 +11,7 @@ from app.bot import texts
 from app.bot.keyboards import RewriteCb, TtsCb, voice_offer_kb
 from app.db import repo
 from app.db.models import Message, User
-from app.llm.openrouter import LLMError
+from app.llm.openrouter import LLMError, LLMParseError
 from app.services.dialog import DialogService, SpeakStatus
 from app.services.plans import limits_for
 from app.services.usage import record_llm
@@ -97,8 +97,11 @@ async def on_rewrite(
     await session.commit()  # запрос к модели — без открытой транзакции
     try:
         rewrite, llm = await dialog.rewriter.rewrite(user, original.text, prev_bot)
-    except (LLMError, ValueError):
+    except (LLMError, ValueError) as exc:
         logger.exception("Rewrite failed for user %s", user.id)
+        if isinstance(exc, LLMParseError):  # модель ответила — расход и лимит засчитываем
+            await record_llm(session, user.id, "llm_rewrite", exc.result)
+            await session.commit()
         await bot.send_message(callback.message.chat.id, texts.REWRITE_FAILED)
         return
     await record_llm(session, user.id, "llm_rewrite", llm)

@@ -204,4 +204,9 @@ class Analyst:
             json_mode=True,
             reasoning_effort=self._settings.analyst_reasoning_effort or None,
         )
-        return AnalystResult(analysis=parse_analysis(result.text, len(goals)), llm=result)
+        try:
+            analysis = parse_analysis(result.text, len(goals))
+        except ValueError as exc:
+            logger.warning("Analyst returned unparseable JSON (%s): %.200s", exc, result.text)
+            analysis = Analysis()
+        return AnalystResult(analysis=analysis, llm=result)

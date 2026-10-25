@@ -196,10 +196,10 @@ class PodcastService:
         except LLMError as exc:
             raise PodcastError("generation_failed") from exc
         await record_llm(session, user.id, "llm_podcast", result)
+        await session.commit()  # дальше озвучка — без открытой транзакции
         try:
             return clean_script(extract_json_object(result.text))
         except ValueError as exc:
-            await session.commit()
             raise PodcastError("generation_failed") from exc
 
     async def _voice(

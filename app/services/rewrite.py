@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from app.config import Settings
 from app.db.models import User
 from app.llm.jsonutil import extract_json_object
-from app.llm.openrouter import LLMResult, OpenRouterClient
+from app.llm.openrouter import LLMParseError, LLMResult, OpenRouterClient
 from app.prompts import render
 
 MAX_CHANGES = 3
@@ -71,4 +71,7 @@ class Rewriter:
             json_mode=True,
             reasoning_effort=self._settings.analyst_reasoning_effort or None,
         )
-        return parse_rewrite(result.text, text), result
+        try:
+            return parse_rewrite(result.text, text), result
+        except ValueError as exc:
+            raise LLMParseError(str(exc), result) from exc

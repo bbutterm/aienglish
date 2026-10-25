@@ -72,7 +72,8 @@ OPENER_NOTES = {
 
 OpenerReason = Literal["onboarding", "reset", "lesson", "idea", "mission", "comeback"]
 
-_PHOTO_TAG_RE = re.compile(r"^\s*\[photo:\s*(?P<desc>[^\]\n]*)\]\s*", re.IGNORECASE)
+# Служебная строка о фото; модель иногда ставит её в конец, повторяет или оборачивает в **.
+_PHOTO_TAG_RE = re.compile(r"[*_]*\[photo:\s*(?P<desc>[^\]\n]*)\][*_]*[ \t]*\n?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -113,12 +114,12 @@ def history_to_messages(history: Sequence[Message]) -> list[dict[str, Any]]:
 
 
 def split_photo_tag(text: str) -> tuple[str | None, str]:
-    """Отделяет служебную строку `[photo: ...]` от ответа собеседника."""
-    match = _PHOTO_TAG_RE.match(text)
+    """Отделяет служебную строку `[photo: ...]` от ответа собеседника — где бы она ни стояла."""
+    match = _PHOTO_TAG_RE.search(text)
     if not match:
         return None, text.strip()
     description = match.group("desc").strip() or None
-    return description, text[match.end() :].strip()
+    return description, _PHOTO_TAG_RE.sub("", text).strip()
 
 
 class Companion:
