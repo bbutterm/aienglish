@@ -1,4 +1,26 @@
-# English Buddy Bot
+<div align="center">
+
+# English Buddy
+
+**Английский через разговор — текстом, голосом и в Telegram Mini App**
+
+Python · Telegram · OpenRouter · ElevenLabs
+
+[Развёртывание](DEPLOY.md) · [Дизайн продукта](DESIGN.md) · [Лендинг](landing/README.md)
+
+</div>
+
+<a href=".github/media/cover.png"><img src=".github/media/cover.png" alt="English Buddy — разговорный английский с другом-собеседником" width="1000"></a>
+
+| Прогресс и рекомендации | Личный словарь |
+| --- | --- |
+| <a href=".github/media/progress.png"><img src=".github/media/progress.png" alt="Прогресс и рекомендации" width="300"></a> | <a href=".github/media/words.png"><img src=".github/media/words.png" alt="Личный словарь" width="300"></a> |
+
+*Экраны настоящего Mini App, заполненные демонстрационными данными. Показатели прогресса и примеры слов иллюстрируют интерфейс. Нажмите на изображение, чтобы открыть его целиком.*
+
+---
+
+## О проекте
 
 Telegram-бот для практики английского через живое общение: друг-нейтив болтает текстом и голосом,
 реагирует на фото, а в фоне копит ошибки и новые слова. Дизайн — в [DESIGN.md](DESIGN.md).
