@@ -205,6 +205,14 @@ class IdeaService:
         """Содержимое темы генерируется один раз — при первом открытии."""
         if idea.content is not None:
             return idea
+        async with self._locks.setdefault(user.id, asyncio.Lock()):
+            # Параллельный запрос мог уже сгенерировать содержимое, пока мы ждали.
+            await session.refresh(idea, ["content", "status"])
+            if idea.content is not None:
+                return idea
+            return await self._open(session, user, idea)
+
+    async def _open(self, session: AsyncSession, user: User, idea: TopicIdea) -> TopicIdea:
         persona = get_persona(user.persona)
         system = render(
             "idea_content_system.md.j2",

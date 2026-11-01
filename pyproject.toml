@@ -44,3 +44,4 @@ ignore = ["ASYNC109"]
 [tool.ruff.lint.per-file-ignores]
 # Фикстуры harness/web импортируются из соседних модулей тестов.
 "tests/test_features_*.py" = ["F401", "F811"]
+"tests/test_audit*.py" = ["F401", "F811"]

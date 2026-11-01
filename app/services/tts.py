@@ -78,9 +78,10 @@ async def ensure_ogg_opus(audio: bytes) -> bytes:
 
 
 class TextToSpeech:
-    def __init__(self, http: httpx.AsyncClient, settings: Settings) -> None:
+    def __init__(self, http: httpx.AsyncClient, settings: Settings, retries: int = 1) -> None:
         self._http = http
         self._settings = settings
+        self._retries = retries
 
     async def synthesize(self, text: str, voice_id: str) -> bytes:
         """Озвучка для голосового сообщения Telegram (OGG/Opus)."""
@@ -89,20 +90,36 @@ class TextToSpeech:
     async def synthesize_raw(
         self, text: str, voice_id: str, output_format: str | None = None
     ) -> bytes:
-        """Аудио в формате ElevenLabs как есть (по умолчанию — TTS_OUTPUT_FORMAT)."""
+        """Аудио в формате ElevenLabs как есть (по умолчанию — TTS_OUTPUT_FORMAT).
+
+        429 и 5xx повторяем: подкаст озвучивает реплики параллельно и легко упирается
+        в лимит одновременных запросов тарифа ElevenLabs.
+        """
         if not voice_id:
             raise TTSError("voice_id is not configured")
         url = f"{self._settings.elevenlabs_base_url.rstrip('/')}/v1/text-to-speech/{voice_id}"
-        try:
-            response = await self._http.post(
-                url,
-                params={"output_format": output_format or self._settings.tts_output_format},
-                json={"text": text, "model_id": self._settings.tts_model},
-                headers={"xi-api-key": self._settings.elevenlabs_api_key},
-                timeout=60,
-            )
-        except httpx.HTTPError as exc:
-            raise TTSError(f"transport error: {exc!r}") from exc
-        if response.status_code != 200:
-            raise TTSError(f"HTTP {response.status_code}: {response.text[:300]}")
-        return response.content
+        for attempt in range(self._retries + 1):
+            try:
+                response = await self._http.post(
+                    url,
+                    params={"output_format": output_format or self._settings.tts_output_format},
+                    json={"text": text, "model_id": self._settings.tts_model},
+                    headers={"xi-api-key": self._settings.elevenlabs_api_key},
+                    timeout=60,
+                )
+            except httpx.TimeoutException as exc:
+                raise TTSError(f"timeout: {exc!r}") from exc
+            except httpx.HTTPError as exc:
+                error = TTSError(f"transport error: {exc!r}")
+            else:
+                if response.status_code == 200:
+                    if not response.content:
+                        raise TTSError("empty audio")
+                    return response.content
+                error = TTSError(f"HTTP {response.status_code}: {response.text[:300]}")
+                if response.status_code < 500 and response.status_code != 429:
+                    raise error
+            logger.warning("TTS attempt %d failed: %s", attempt + 1, error)
+            if attempt < self._retries:
+                await asyncio.sleep(1 + attempt)
+        raise error

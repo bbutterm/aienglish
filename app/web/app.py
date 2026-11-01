@@ -149,7 +149,7 @@ def _static_version() -> str:
 
 
 def create_app(state: WebState) -> FastAPI:
-    app = FastAPI(title="English Buddy Mini App", docs_url=None, redoc_url=None)
+    app = FastAPI(title="English Buddy Mini App", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.web = state
     index_html = (STATIC_DIR / "index.html").read_text().replace("__VERSION__", _static_version())
 

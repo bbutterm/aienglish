@@ -1,6 +1,7 @@
 import asyncio
 import enum
 import logging
+import weakref
 from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -27,7 +28,7 @@ from app.services.missions import apply_goals, is_expired, pending_goals
 from app.services.plans import limits_for
 from app.services.rewrite import Rewriter
 from app.services.stt import SpeechToText
-from app.services.tts import TextToSpeech, TTSError, prepare_tts_text
+from app.services.tts import TextToSpeech, TTSError, ensure_ogg_opus, prepare_tts_text
 from app.services.usage import record_llm, record_usage, stt_cost, tts_cost
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,23 @@ class BackgroundTasks:
             await asyncio.wait(set(self._tasks), timeout=timeout)
 
 
+class UserLocks:
+    """Платные апдейты одного пользователя — по очереди.
+
+    aiogram обрабатывает апдейты параллельно: без очереди пачка голосовых, альбом фото или три
+    быстрых нажатия 🔊 проходят проверку лимита до того, как первый из них что-то запишет.
+    """
+
+    def __init__(self) -> None:
+        self._locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
+
+    def get(self, user_id: int) -> asyncio.Lock:
+        lock = self._locks.get(user_id)
+        if lock is None:
+            lock = self._locks[user_id] = asyncio.Lock()
+        return lock
+
+
 VOICE_OFFER_AFTER_TAPS = 2
 
 
@@ -66,6 +84,9 @@ def wants_voice(user: User, input_kind: str | None) -> bool:
     if user.voice_mode == "always":
         return True
     return user.voice_mode == "auto" and input_kind == "voice"
+
+
+RESET_USAGE_KIND = "llm_reset"  # первая реплика новой темы по /reset — считается в дневной лимит
 
 
 class SpeakStatus(enum.Enum):
@@ -109,6 +130,7 @@ class DialogService:
         self.stt = stt
         self.tts = tts
         self.tasks = tasks
+        self.locks = UserLocks()
         self._tts_limit_notified: set[tuple[int, date]] = set()
         self._tts_taps: dict[tuple[int, date], int] = {}
         self._voice_offered: set[int] = set()
@@ -116,8 +138,10 @@ class DialogService:
     # --- лимиты ---
 
     async def messages_left(self, session: AsyncSession, user: User) -> int:
+        """Остаток дневного лимита: реплики пользователя и новые темы по /reset."""
         since = repo.day_start_utc(user.timezone)
         used = await repo.count_user_messages_since(session, user.id, since)
+        used += await repo.count_usage_since(session, user.id, RESET_USAGE_KIND, since)
         return limits_for(user, self.settings).messages - used
 
     # --- диалог ---
@@ -187,11 +211,13 @@ class DialogService:
         topic: str | None = None,
     ) -> Message:
         summary, history = await self.memory.context(session, user)
+        await session.commit()  # запрос к модели — без открытой транзакции
         reply = await self.companion.opener(user, history, summary, reason=reason, topic=topic)
         message = await repo.add_message(
             session, user_id=user.id, role="assistant", kind="text", text=reply.text
         )
-        await record_llm(session, user.id, "llm_companion", reply.llm)
+        kind = RESET_USAGE_KIND if reason == "reset" else "llm_companion"
+        await record_llm(session, user.id, kind, reply.llm)
         await session.commit()
         return message
 
@@ -306,24 +332,32 @@ class DialogService:
                     )
             return SpeakStatus.LIMIT
 
+        await session.commit()  # TTS и отправка голосового — без открытой транзакции
         text = prepare_tts_text(message.text or "", self.settings.tts_max_chars)
         if not text:
             return SpeakStatus.FAILED
         voice_id = get_persona(user.persona).voice_id(self.settings)
         async with ChatActionSender.record_voice(bot=bot, chat_id=chat_id):
             try:
-                audio = await self.tts.synthesize(text, voice_id)
+                raw = await self.tts.synthesize_raw(text, voice_id)
             except TTSError:
                 logger.exception("TTS failed for message %s", message.id)
                 return SpeakStatus.FAILED
-        await record_usage(
-            session,
-            user_id=user.id,
-            kind="tts",
-            model=self.settings.tts_model,
-            chars=len(text),
-            cost_usd=tts_cost(len(text), self.settings),
-        )
+            # ElevenLabs уже взял деньги — учитываем сразу, даже если конвертация не удастся.
+            await record_usage(
+                session,
+                user_id=user.id,
+                kind="tts",
+                model=self.settings.tts_model,
+                chars=len(text),
+                cost_usd=tts_cost(len(text), self.settings),
+            )
+            await session.commit()
+            try:
+                audio = await ensure_ogg_opus(raw)
+            except TTSError:
+                logger.exception("Voice conversion failed for message %s", message.id)
+                return SpeakStatus.FAILED
         try:
             file = BufferedInputFile(audio, filename="reply.ogg")
             sent = await self._send_voice(bot, chat_id, file, caption, reply_markup)

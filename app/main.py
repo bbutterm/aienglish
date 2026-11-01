@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import Iterable
+from typing import Any
 
 import httpx
 from aiogram import Bot, Dispatcher
@@ -40,12 +42,52 @@ BOT_COMMANDS = [
 ]
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(level: str, secrets: Iterable[str] = ()) -> None:
     logging.basicConfig(
         level=level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    redact_secrets(secrets)
+
+
+def secrets_of(settings: Settings) -> list[str]:
+    return [settings.telegram_bot_token, settings.openrouter_api_key, settings.elevenlabs_api_key]
+
+
+def redact_secrets(secrets: Iterable[str]) -> None:
+    """Токен бота и ключи API не попадают в логи — даже из текста исключений.
+
+    Пример: если файловый сервер Telegram ответил ошибкой, текст исключения содержит URL
+    /file/bot<ТОКЕН>/... Чистим каждую запись при создании — до любых обработчиков,
+    в том числе uvicorn.
+    """
+    secrets = [s for s in secrets if s and len(s) >= 8]
+    if not secrets:
+        return
+    make_record = logging.getLogRecordFactory()
+    formatter = logging.Formatter()
+
+    def scrub(text: str) -> str:
+        for secret in secrets:
+            text = text.replace(secret, "***")
+        return text
+
+    def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = make_record(*args, **kwargs)
+        try:
+            message = record.getMessage()
+        except Exception:  # кривые аргументы лога — пусть разбирается сам logging
+            return record
+        if any(secret in message for secret in secrets):
+            record.msg, record.args = scrub(message), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = formatter.formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = scrub(record.exc_text)
+        return record
+
+    logging.setLogRecordFactory(record_factory)
 
 
 def build_llm(settings: Settings, http: httpx.AsyncClient) -> OpenRouterClient:
@@ -131,7 +173,7 @@ async def run(settings: Settings) -> None:
 
 def main() -> None:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, secrets_of(settings))
     asyncio.run(run(settings))
 
 

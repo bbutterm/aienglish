@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from fastapi import Depends, HTTPException, Request
@@ -70,7 +71,22 @@ async def get_user(
     user = await repo.upsert_user(session, tg_user.id, tg_user.username, tg_user.first_name)
     if user.blocked:
         raise api_error(403, "blocked", "Доступ закрыт.")
+    zone = request.headers.get("X-Timezone", "")
+    if zone and zone != user.timezone and valid_timezone(zone):
+        # Пояс устройства: по нему «друг пишет первым» молчит ночью, лимиты сбрасываются в полночь.
+        user.timezone = zone
+        await session.commit()
     return user
+
+
+def valid_timezone(zone: str) -> bool:
+    if len(zone) > 64:
+        return False
+    try:
+        ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 async def get_admin(

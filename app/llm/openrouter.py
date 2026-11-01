@@ -19,6 +19,10 @@ class _RetryableError(LLMError):
     pass
 
 
+class _TimeoutError(LLMError):
+    """Модель не ответила за таймаут — повтор той же модели снова займёт минуту."""
+
+
 @dataclass(frozen=True)
 class LLMResult:
     text: str
@@ -26,6 +30,14 @@ class LLMResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+
+
+class LLMParseError(ValueError):
+    """Модель ответила (и это стоило денег), но ответ не разобрать — расход всё равно учитываем."""
+
+    def __init__(self, message: str, result: LLMResult) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 class OpenRouterClient:
@@ -72,7 +84,7 @@ class OpenRouterClient:
                     logger.warning("LLM %s attempt %d failed: %s", model, attempt + 1, exc)
                     if attempt < self._retries:
                         await asyncio.sleep(self._backoff * 2**attempt)
-                except LLMError as exc:
+                except LLMError as exc:  # в т.ч. таймаут: сразу к запасной модели
                     last_error = exc
                     logger.warning("LLM %s failed: %s", model, exc)
                     break
@@ -87,7 +99,8 @@ class OpenRouterClient:
         json_mode: bool,
         reasoning_effort: str | None,
     ) -> LLMResult:
-        body: dict[str, Any] = {"model": model, "messages": messages}
+        # usage.include — чтобы OpenRouter вернул стоимость запроса (usage.cost) для учёта.
+        body: dict[str, Any] = {"model": model, "messages": messages, "usage": {"include": True}}
         if temperature is not None:
             body["temperature"] = temperature
         if max_tokens is not None:
@@ -107,6 +120,8 @@ class OpenRouterClient:
                 },
                 timeout=self._timeout,
             )
+        except httpx.TimeoutException as exc:
+            raise _TimeoutError(f"timeout: {exc!r}") from exc
         except httpx.HTTPError as exc:
             raise _RetryableError(f"transport error: {exc!r}") from exc
 
@@ -119,20 +134,25 @@ class OpenRouterClient:
             data = response.json()
         except ValueError as exc:
             raise _RetryableError("invalid JSON in response") from exc
+        if not isinstance(data, dict):
+            raise _RetryableError("response is not a JSON object")
         if data.get("error"):
             # OpenRouter может вернуть 200 с ошибкой провайдера внутри.
             raise _RetryableError(f"provider error: {data['error']}")
 
-        choices = data.get("choices") or []
-        if not choices:
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise _RetryableError("empty choices")
-        text = _extract_text(choices[0].get("message", {}).get("content"))
+        message = choices[0].get("message")
+        text = _extract_text(message.get("content") if isinstance(message, dict) else None)
         if not text.strip():
-            raise _RetryableError(
-                f"empty content (finish_reason={choices[0].get('finish_reason')})"
-            )
+            reason = choices[0].get("finish_reason")
+            if reason == "length":
+                # Рассуждения съели max_tokens: повтор той же модели снова заплатит за пустоту.
+                raise LLMError("empty content: max_tokens spent on reasoning")
+            raise _RetryableError(f"empty content (finish_reason={reason})")
 
-        usage = data.get("usage") or {}
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         return LLMResult(
             text=text.strip(),
             model=data.get("model") or model,

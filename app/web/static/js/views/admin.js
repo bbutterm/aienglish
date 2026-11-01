@@ -21,13 +21,15 @@ import {
 
 const KIND_LABELS = {
   llm_companion: "Собеседник",
+  llm_reset: "Новая тема (/reset)",
   llm_analyst: "Аналитик",
   llm_summary: "Саммари",
   llm_lesson: "Генерация уроков",
   llm_ideas: "Темы для тебя",
   llm_idea_content: "Содержание тем",
   llm_rewrite: "Как сказать лучше",
-  llm_extract: "Слова с фото и из постов",
+  llm_extract: "Слова с фото",
+  llm_forward: "Разбор пересланного",
   llm_podcast: "Сценарии подкастов",
   stt: "Распознавание речи",
   tts: "Озвучка ответов",

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -127,7 +127,8 @@ def clean_exercise(
     }
     if kind == "fix":
         mistake_id = item.get("mistake_id")
-        exercise["mistake_id"] = mistake_id if mistake_id in mistake_ids else None
+        valid = isinstance(mistake_id, int) and not isinstance(mistake_id, bool)
+        exercise["mistake_id"] = mistake_id if valid and mistake_id in mistake_ids else None
     elif kind == "gap":
         sentence = _text(item.get("sentence"), 300)
         if not sentence or not _GAP_RE.search(sentence):
@@ -530,7 +531,13 @@ class LessonService:
             reasoning_effort=self._settings.lesson_reasoning_effort or None,
         )
         await record_llm(session, user.id, "llm_lesson", result)
-        return build_payload(extract_json_object(result.text), material, rng)
+        try:
+            return build_payload(extract_json_object(result.text), material, rng)
+        except ValueError:
+            raise
+        except Exception as exc:  # неожиданная форма JSON — простой урок лучше, чем ошибка 500
+            logger.exception("Unexpected lesson JSON for user %s", user.id)
+            raise ValueError("unexpected lesson JSON") from exc
 
     async def _material_json(self, session: AsyncSession, user: User, material: Material) -> str:
         since = datetime.now(UTC) - timedelta(days=30)
@@ -597,12 +604,21 @@ class LessonService:
         """Завершает урок. True — если он завершён именно сейчас (а не раньше)."""
         if lesson.status == "done":
             return False
-        lesson.status = "done"
-        lesson.score = sum(1 for a in lesson.answers.values() if a.get("correct"))
-        lesson.total = len(lesson.payload["exercises"])
-        lesson.completed_at = datetime.now(UTC)
+        # Атомарно: из двух параллельных запросов урок завершает (и шлёт follow-up) только один.
+        claimed = await session.scalar(
+            update(Lesson)
+            .where(Lesson.id == lesson.id, Lesson.status != "done")
+            .values(
+                status="done",
+                score=sum(1 for a in lesson.answers.values() if a.get("correct")),
+                total=len(lesson.payload["exercises"]),
+                completed_at=datetime.now(UTC),
+            )
+            .returning(Lesson.id)
+        )
         await session.commit()
-        return True
+        await session.refresh(lesson)
+        return claimed is not None
 
     async def audio(
         self, session: AsyncSession, user: User, lesson: Lesson, index: int
@@ -619,6 +635,7 @@ class LessonService:
         cached = await session.get(AudioCache, key)
         if cached is not None:
             return cached.content, cached.mime
+        await session.commit()  # TTS — без открытой транзакции
 
         try:
             content = await self._tts.synthesize_raw(text, voice_id, audio_format)
@@ -634,6 +651,7 @@ class LessonService:
             chars=len(text),
             cost_usd=tts_cost(len(text), self._settings),
         )
+        await session.commit()  # расход — до кэша: откат при гонке за кэш его не сотрёт
         session.add(AudioCache(key=key, content=content, mime=mime))
         try:
             await session.commit()

@@ -9,8 +9,17 @@ export class ApiError extends Error {
   }
 }
 
+// Часовой пояс устройства: Telegram его боту не сообщает, а он нужен для «не писать ночью».
+let timeZone = "";
+try {
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+} catch {
+  /* старый браузер — останется пояс по умолчанию */
+}
+
 async function request(method, path, body, { raw = false } = {}) {
   const headers = { Authorization: `tma ${tg?.initData || ""}` };
+  if (timeZone) headers["X-Timezone"] = timeZone;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let response;
   try {

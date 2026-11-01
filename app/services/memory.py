@@ -57,17 +57,19 @@ class Memory:
         lock = self._locks[user_id]
         if lock.locked():
             return
-        async with lock, self._session_factory() as session:
-            user = await session.get(User, user_id)
-            if user is None:
-                return
-            if await repo.count_live_messages(session, user) <= self._settings.summary_trigger:
-                return
-            live = await repo.get_live_messages(session, user)
+        async with lock:
+            async with self._session_factory() as session:
+                user = await session.get(User, user_id)
+                if user is None:
+                    return
+                if await repo.count_live_messages(session, user) <= self._settings.summary_trigger:
+                    return
+                live = await repo.get_live_messages(session, user)
             old = live[: -self._settings.history_window]
             if not old:
                 return
 
+            # Запрос к модели — без открытого соединения с БД.
             persona = get_persona(user.persona)
             transcript = format_transcript(old, user.name, persona.name)
             prompt = render("summary_system.md.j2", persona_name=persona.name, user_name=user.name)
@@ -82,13 +84,14 @@ class Memory:
                 max_tokens=1024,
                 reasoning_effort=self._settings.analyst_reasoning_effort or None,
             )
-            # Compare-and-set: если пока считали саммари, пользователь сделал /reset — не затираем.
-            updated = await session.execute(
-                update(User)
-                .where(User.id == user_id, User.context_start_id == user.context_start_id)
-                .values(conversation_summary=result.text, context_start_id=old[-1].id)
-            )
-            await record_llm(session, user_id, "llm_summary", result)
-            await session.commit()
+            async with self._session_factory() as session:
+                # Compare-and-set: если пока считали саммари, был /reset — не затираем.
+                updated = await session.execute(
+                    update(User)
+                    .where(User.id == user_id, User.context_start_id == user.context_start_id)
+                    .values(conversation_summary=result.text, context_start_id=old[-1].id)
+                )
+                await record_llm(session, user_id, "llm_summary", result)
+                await session.commit()
             if updated.rowcount:
                 logger.info("Summarized %d messages for user %s", len(old), user_id)
